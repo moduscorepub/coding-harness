@@ -1,0 +1,28 @@
+# Example deployment profile: enterprise awareness for the built-in enterprise extension.
+# Copy this folder for your organization and install it with HARNESS_PROFILE=<folder>.
+# Deploy to /etc/harness/enterprise.yml via MDM (wins per section) or ~/.harness/enterprise.yml.
+org: Example Corp
+gateway:
+  name: Example LLM Gateway
+  url: __HARNESS_GATEWAY_URL__
+  keyEnvs: [HARNESS_ANTHROPIC_API_KEY, HARNESS_OPENAI_API_KEY]
+identity:
+  groupPrefix: ""            # e.g. "EXAMPLE-" to consider only your organization's AD groups
+groups:                      # AD group -> entitlements; `default` applies when no listed group matches
+  default:
+    denyTools: []
+  EXAMPLE-CONTRACTORS:
+    denyTools: [devin_session, browser]
+knowledgeBase:
+  name: Engineering KB
+  url: __HARNESS_KB_URL__        # POST {url}/search {query, top_k} -> {results: [{title, url, snippet}]}
+  keyEnv: HARNESS_KB_API_KEY
+  topK: 5
+devin:
+  url: https://api.devin.ai
+  keyEnv: DEVIN_API_KEY
+network:
+  proxy: ""                  # e.g. http://proxy.__HARNESS_DOMAIN__:8080 (exported as HTTPS_PROXY for tools)
+  noProxy: localhost,127.0.0.1,.__HARNESS_DOMAIN__
+  egressAllow: ["*.__HARNESS_DOMAIN__", "api.devin.ai", "github.com", "*.github.com", "registry.npmjs.org", "pypi.org", "files.pythonhosted.org"]
+  ingress: inbound collab/share relays are internal only; no remote control from outside the corporate network

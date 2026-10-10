@@ -1,0 +1,36 @@
+// coding-harness.invalid account. Not a model provider: the credential authorizes
+// harness-hosted Moduscore services such as `harness stream` (live.coding-harness.invalid).
+//
+// Two hosts: the Moduscore API at api.coding-harness.invalid (`{base}`, MODUSCORE_BASE_URL)
+// and the OIDC issuer at auth.coding-harness.invalid (`{auth}`, MODUSCORE_AUTH_URL) which
+// serves the PKCE-mandatory authorization codes under /oauth/* and mints
+// ES256 access tokens. The public client id `harness` is code-defined in the
+// issuer with a port-flexible 127.0.0.1 loopback callback.
+auth "moduscore" {
+	name "Moduscore (invite only)"
+	env "MODUSCORE_API_KEY"
+	login "oauth-code" {
+		client-id "harness" env="MODUSCORE_CLIENT_ID"
+		base-url "https://api.coding-harness.invalid" {
+			env "MODUSCORE_BASE_URL"
+		}
+		auth-url "https://auth.coding-harness.invalid" {
+			env "MODUSCORE_AUTH_URL"
+		}
+		authorize-url "{auth}/oauth/authorize"
+		scopes "openid" "profile" "email" "offline_access"
+		pkce #true
+		instructions "Sign in to your coding-harness.invalid account in the browser. If the browser cannot reach this machine, paste the final redirect URL when prompted."
+		callback port=54547 path="/callback" hostname="127.0.0.1" redirect-uri-env="MODUSCORE_REDIRECT_URI"
+		token url="{auth}/oauth/token" body="form"
+		credential {
+			access "access_token"
+			refresh "refresh_token"
+			expires "seconds" path="expires_in" skew-ms=300000
+		}
+		userinfo url="{auth}/oauth/userinfo" email="email" account-id="sub"
+	}
+	refresh {
+		token url="{auth}/oauth/token" body="form"
+	}
+}

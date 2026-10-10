@@ -1,0 +1,9 @@
+{
+  "name": "hello-extension",
+  "version": "1.0.0",
+  "description": "Minimal harness extension example",
+  "homepage": "https://coding-harness.invalid",
+  "harness": {
+    "extensions": ["./index.ts"]
+  }
+}

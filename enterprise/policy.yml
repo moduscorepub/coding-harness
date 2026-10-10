@@ -1,0 +1,16 @@
+# IT-locked settings, loaded as an overlay that outranks user and project config.
+# Deploy to /etc/harness/policy.yml via MDM (wins) or ~/.harness/policy.yml (installer).
+collab:
+  autoStart: "off"
+  relayUrl: wss://collab.__HARNESS_DOMAIN__
+share:
+  serverUrl: https://share.__HARNESS_DOMAIN__/s
+  redactSecrets: true
+dev:
+  autoqa: false
+startup:
+  checkUpdate: false
+telemetry:
+  otlpExportEnabled: false
+marketplace:
+  autoUpdate: "off"

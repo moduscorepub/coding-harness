@@ -1,0 +1,12 @@
+# Route the built-in providers through the organization's LLM gateway. `apiKey` names the env var holding the issued key.
+providers:
+  anthropic:
+    baseUrl: __HARNESS_GATEWAY_URL__
+    apiKey: HARNESS_ANTHROPIC_API_KEY
+    headers:
+      X-Harness-Client: coding-harness
+  openai:
+    baseUrl: __HARNESS_GATEWAY_URL__/openai/v1
+    apiKey: HARNESS_OPENAI_API_KEY
+    headers:
+      X-Harness-Client: coding-harness

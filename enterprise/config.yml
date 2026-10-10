@@ -1,0 +1,33 @@
+# Default settings, seeded to ~/.harness/agent/config.yml on first install. Users may tune via /settings.
+# Per-agent delegation: plan = planning, default/task = execution, smol/tiny/commit = labelling.
+modelRoles:
+  default: anthropic/claude-opus-5-5:high
+  plan: anthropic/claude-opus-5-5:xhigh
+  slow: anthropic/claude-opus-5-5:max
+  task: anthropic/claude-sonnet-5-5:high
+  advisor: anthropic/claude-sonnet-5-5:high
+  smol: anthropic/claude-haiku-5-5:low
+  tiny: anthropic/claude-haiku-5-5:low
+  commit: anthropic/claude-haiku-5-5:low
+  memory: anthropic/claude-haiku-5-5:low
+theme:
+  dark: harness
+compaction:
+  enabled: true
+  midTurnEnabled: true
+  asyncEnabled: true
+  thresholdPercent: 75
+  supersedeReads: true
+  methodOrder: [snapcompact, handoff, shake, soft]
+snapcompact:
+  toolResults: true
+task:
+  prewalk: true
+ratchet:
+  enabled: true
+plan:
+  enabled: true
+goal:
+  enabled: true
+startup:
+  setupWizard: false
