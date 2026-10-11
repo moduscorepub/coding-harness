@@ -375,6 +375,8 @@ A continuation an advisor delivery itself starts — a steer while the primary i
 
 At the same directory depth, `.yml` candidates precede `.yaml` candidates, and `.harness/<filename>` precedes the standalone `<filename>`. Later entries win slug collisions; top-level instructions still concatenate.
 
+Extensions can contribute `WATCHDOG.md`, `WATCHDOG.yml` and `WATCHDOG.yaml` files through `resources_discover` `watchdogPaths` ([extensions](./extensions.md#resources_discover)). They load after the project leaf and are therefore the most specific level: their advisor entries replace same-slug entries from project and user files, and their `WATCHDOG.md` text is the last attention block. Subagent sessions emit `resources_discover` themselves, so an advised subagent sees the files its own extensions return.
+
 ## Subagents
 
 Subagents run unadvised by default; advisors are opted in **per agent** instead of via a blanket toggle:

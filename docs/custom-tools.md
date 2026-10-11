@@ -48,7 +48,7 @@ CustomTool.execute(toolCallId, params, onUpdate, ctx, signal)
 
 1. Capability providers (`toolCapability`), including:
    - Native Harness config (`<agentDir>/tools`, default `~/.harness/agent/tools`; `.harness/tools`)
-   - Claude config (`<Claude config dir>/tools`, default `~/.claude/tools`; `.claude/tools`)
+   - Claude config (`<Claude config dir>/tools`, default `~/.claude/tools`; `.claude/tools`), only with `claude.customTools: true`. Claude Code has no `.claude/tools/` convention, so files there usually belong to other tooling and are not loaded by default.
    - Codex config (`~/.codex/tools`, `.codex/tools`)
    - Harness package roots and Claude marketplace plugins
 2. Enabled installed plugin manifests (user `~/.harness/plugins` and the active project `.harness/plugins` registry via the plugin loader; project packages shadow same-named user packages)

@@ -124,6 +124,23 @@ export const cfgCommandsEnableClaudeProject = register({
 	},
 });
 
+/**
+ * Claude Code has no `.claude/tools/` convention: files there belong to other
+ * tooling (an engine checkout, scripts) and are not tool modules. Loading them
+ * as custom tools is therefore opt-in.
+ */
+export const cfgClaudeCustomTools = register({
+	id: "claude.customTools",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "tasks",
+		group: "Commands & Skills",
+		label: "Claude Custom Tools",
+		description: "Load .ts/.js files in ~/.claude/tools/ and .claude/tools/ as custom tools",
+	},
+});
+
 export const cfgCommandsEnableOpencodeUser = register({
 	id: "commands.enableOpencodeUser",
 	type: "boolean",

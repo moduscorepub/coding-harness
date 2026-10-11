@@ -67,6 +67,7 @@ export async function collectConfigCandidates(
 	cwd: string,
 	agentDir: string | undefined,
 	filenames: string[],
+	extraFiles: readonly string[] = [],
 ): Promise<ConfigCandidate[]> {
 	const home = os.homedir();
 	const resolvedAgentDir = agentDir ?? getAgentDir();
@@ -130,15 +131,36 @@ export async function collectConfigCandidates(
 		return b.depth - a.depth;
 	});
 
+	// Extension-contributed files (`resources_discover` `watchdogPaths`) follow the
+	// project leaf, so they are the most specific level.
+	const seen = new Set(items.map(item => item.path));
+	for (const extraFile of extraFiles) {
+		const resolved = path.resolve(cwd, extraFile);
+		if (seen.has(resolved) || !filenames.includes(path.basename(resolved))) continue;
+		try {
+			items.push({ path: resolved, content: await Bun.file(resolved).text(), level: "project", depth: -1 });
+			seen.add(resolved);
+		} catch (err) {
+			if (!isEnoent(err)) {
+				logger.warn("Failed to read extension watchdog file", { path: resolved, error: String(err) });
+			}
+		}
+	}
+
 	return items;
 }
 
 /**
- * Discover and load WATCHDOG.md files walking up from cwd, project .harness folder, and user agent dir.
+ * Discover and load WATCHDOG.md files walking up from cwd, project .harness folder, and user agent dir,
+ * plus extension-contributed `WATCHDOG.md` files.
  * Returns formatted watchdog file blocks ready to be appended to the advisor system prompt.
  */
-export async function discoverWatchdogFiles(cwd: string, agentDir?: string): Promise<string[]> {
-	const items = await collectConfigCandidates(cwd, agentDir, ["WATCHDOG.md"]);
+export async function discoverWatchdogFiles(
+	cwd: string,
+	agentDir?: string,
+	extraFiles: readonly string[] = [],
+): Promise<string[]> {
+	const items = await collectConfigCandidates(cwd, agentDir, ["WATCHDOG.md"], extraFiles);
 	const blocks: string[] = [];
 	for (const item of items) {
 		const expanded = await expandAtImports(item.content, item.path);

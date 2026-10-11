@@ -167,9 +167,9 @@ Shared release steps live in @../RELEASE.md and personal aliases in @~/.notes/al
 
 The exact rules:
 
-- **Relative paths resolve from the importing file's own directory**, not the session's working directory.
+- **Relative paths resolve from the importing file's own directory**, not the session's working directory. One exception mirrors Claude Code: for a context file under `<project>/.claude/` (such as `.claude/CLAUDE.md`), a relative import that misses next to the file is retried from `<project>`, so `@.claude/rules/x.md` written there resolves.
 - **`~/` and `~`** resolve from the user's home directory; absolute paths are used as-is.
-- **Tokens inside fenced code blocks and inline code spans are left untouched** — useful when you want to _write about_ an `@token` without expanding it.
+- **Tokens inside fenced code blocks, inline code spans and HTML comments (`<!-- … -->`) are left untouched** — useful when you want to _write about_ an `@token` without expanding it.
 - **`git@github.com:org/repo.git` and `user@example.com`-style tokens are not treated as imports.** A token only counts when the `@` sits at the start of a line or after a space or tab.
 - **Trailing sentence punctuation is trimmed** off the path (`. , ; : ! ? ) ] } " '`), so `@docs/setup.md.` imports `docs/setup.md`.
 - **Imports recurse up to five hops.** An imported file may itself contain `@` imports, up to a total depth of five.
@@ -292,4 +292,4 @@ Only native `RULES.md` locations are sticky: the active user agent directory and
 
 ### An `@` import did not expand
 
-Confirm the target exists relative to the importing file (not the cwd). Imports inside fenced code blocks or inline code spans are intentionally left literal, `git@`/email-looking tokens are never imported, cycles are skipped, expansion stops after five hops, and a missing target leaves the original `@path` text unchanged.
+Confirm the target exists relative to the importing file (not the cwd); files under `.claude/` also try the project root. Imports inside fenced code blocks, inline code spans and HTML comments are intentionally left literal, `git@`/email-looking tokens are never imported, cycles are skipped, expansion stops after five hops, and a missing target leaves the original `@path` text unchanged.

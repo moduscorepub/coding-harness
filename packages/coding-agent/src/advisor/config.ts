@@ -183,14 +183,19 @@ function filterAdvisorTools(tools: string[] | undefined, sourcePath: string): st
 
 /**
  * Discover advisor configs from `WATCHDOG.yml`/`WATCHDOG.yaml` files on the same
- * user + project search path as `WATCHDOG.md`. Advisors are keyed by slug; a
- * more-specific file (project leaf > project ancestor > user) replaces an earlier
- * entry with the same slug. Top-level `instructions` across all files concatenate
- * into the shared baseline. A malformed file is logged and skipped — never
- * thrown — so a bad project config can't kill the session.
+ * user + project search path as `WATCHDOG.md`, plus extension-contributed files
+ * (`resources_discover` `watchdogPaths`) as the most specific level. Advisors are
+ * keyed by slug; a more-specific file (extension > project leaf > project ancestor
+ * > user) replaces an earlier entry with the same slug. Top-level `instructions`
+ * across all files concatenate into the shared baseline. A malformed file is
+ * logged and skipped — never thrown — so a bad project config can't kill the session.
  */
-export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Promise<DiscoveredAdvisors> {
-	const items = await collectConfigCandidates(cwd, agentDir, ["WATCHDOG.yml", "WATCHDOG.yaml"]);
+export async function discoverAdvisorConfigs(
+	cwd: string,
+	agentDir?: string,
+	extraFiles: readonly string[] = [],
+): Promise<DiscoveredAdvisors> {
+	const items = await collectConfigCandidates(cwd, agentDir, ["WATCHDOG.yml", "WATCHDOG.yaml"], extraFiles);
 	const advisors = new Map<string, AdvisorConfig>();
 	const sharedParts: string[] = [];
 	let sharedMaxNotesPerUpdate: number | undefined;

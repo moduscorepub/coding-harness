@@ -46,6 +46,9 @@ import {
 	formatAdvisorContextPrompt,
 	formatAdvisorMemoryPrompt,
 } from "./advisor";
+import { setExtensionThemeDirs } from "@coding-harness/tui/theme";
+import { discoverExtensionResources, mergeByName } from "./extensibility/extensions/resource-discovery";
+import { refreshAgentDiscovery } from "./task";
 import { AsyncJobManager } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
 import { createAutoresearchExtension } from "./autoresearch";
@@ -2162,7 +2165,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		}
 		return result;
 	};
-	const [initialContextFiles, resolvedWorkspaceTree, watchdogFiles, initialActiveRepoContext, discoveredAdvisors] =
+	const [initialContextFiles, resolvedWorkspaceTree, initialWatchdogFiles, initialActiveRepoContext, initialAdvisors] =
 		await Promise.all([
 			contextFilesPromise,
 			raceWithDeadline("buildWorkspaceTree", workspaceTreePromise ?? Promise.resolve(emptyWorkspaceTree)),
@@ -2171,6 +2174,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			advisorConfigsPromise,
 		]);
 	let contextFiles = initialContextFiles;
+	// Reassigned once extensions contribute watchdog files through `resources_discover`.
+	let watchdogFiles = initialWatchdogFiles;
+	let discoveredAdvisors = initialAdvisors;
 
 	let agent: Agent;
 	const effectiveGetApiKey =
@@ -2495,7 +2501,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// Provider, never a stored value: inherited child policy remains linked to
 		// the owning session, while top-level sessions materialize their own live
 		// settings on every discovery call.
-		const buildSessionExtensionRoots =
+		const baseSessionExtensionRoots =
 			options.extensionRoots ??
 			((): EffectiveExtensionRoots => ({
 				explicit: options.additionalExtensionPaths ?? [],
@@ -2503,6 +2509,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				configured: cfgExtensions.get(settings),
 				configuredLevel: settings.extensionsSourceLevel(),
 			}));
+		// Agent directories this session's extensions contribute (`resources_discover`
+		// `agentPaths`), layered over any the owning session already contributed.
+		let sessionExtensionAgentDirs: readonly string[] = [];
+		const buildSessionExtensionRoots = (): EffectiveExtensionRoots => {
+			const base = baseSessionExtensionRoots();
+			if (sessionExtensionAgentDirs.length === 0) return base;
+			const extensionAgentDirs = [...new Set([...(base.extensionAgentDirs ?? []), ...sessionExtensionAgentDirs])];
+			return { ...base, extensionAgentDirs };
+		};
 		const mcpDiscoverOptions = {
 			onStatus: onMCPStatus,
 			startupTimeoutMs: cfgMcpStartupTimeoutMs.get(settings),
@@ -3314,6 +3329,53 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			void extensionRunner.emitCredentialDisabled(event);
 		}
 
+		// Extension-contributed resources (`resources_discover`). Merged before the first
+		// system prompt and tool descriptions are built; rules and agent directories are
+		// refreshed again on session rebuilds (see rebuildSystemPrompt).
+		const applyExtensionAgentDirs = async (dirs: readonly string[]): Promise<void> => {
+			if (dirs.length === 0 && sessionExtensionAgentDirs.length === 0) return;
+			sessionExtensionAgentDirs = dirs;
+			// The task tool was created before extensions loaded; publish a discovery
+			// snapshot under the new roots so its agent list includes these definitions.
+			await refreshAgentDiscovery(cwd, buildSessionExtensionRoots());
+		};
+		const mergeExtensionRules = (baseRules: readonly Rule[], extensionRules: readonly Rule[]): Rule[] =>
+			extensionRules.length === 0 ? [...baseRules] : mergeByName(baseRules, extensionRules);
+		const startupExtensionResources = await logger.time("discoverExtensionResources", () =>
+			discoverExtensionResources(extensionRunner, cwd, "startup"),
+		);
+		if (startupExtensionResources.skills.length > 0) {
+			skills = mergeByName(skills, startupExtensionResources.skills);
+			skillWarnings = [...skillWarnings, ...startupExtensionResources.skillWarnings];
+			if (!options.parentTaskPrefix) setActiveSkills(skills);
+		}
+		if (startupExtensionResources.rules.length > 0) {
+			const ttsrSettings = cfgTtsr.get(settings);
+			const ruleItems = mergeExtensionRules(toolSession.rules ?? allRules, startupExtensionResources.rules);
+			const buckets = bucketRules(ruleItems, ttsrManager, {
+				builtinRules: ttsrSettings.builtinRules,
+				disabledRules: ttsrSettings.disabledRules,
+				agentName: resolvedAgentName,
+				replaceTtsrRules: true,
+			});
+			rulebookRules = buckets.rulebookRules;
+			alwaysApplyRules = buckets.alwaysApplyRules;
+			const nextActiveRules = [...rulebookRules, ...alwaysApplyRules, ...ttsrManager.getRules()];
+			toolSession.rules = ruleItems;
+			toolSession.activeRules = nextActiveRules;
+			if (!options.parentTaskPrefix) setActiveRules(nextActiveRules);
+		}
+		await applyExtensionAgentDirs(startupExtensionResources.agentDirs);
+		if (startupExtensionResources.watchdogFiles.length > 0) {
+			[watchdogFiles, discoveredAdvisors] = await Promise.all([
+				discoverWatchdogFiles(cwd, agentDir, startupExtensionResources.watchdogFiles),
+				discoverAdvisorConfigs(cwd, agentDir, startupExtensionResources.watchdogFiles),
+			]);
+		}
+		if (!isSubagentSession && startupExtensionResources.themeDirs.length > 0) {
+			setExtensionThemeDirs(startupExtensionResources.themeDirs);
+		}
+
 		const getSessionContext = () => ({
 			sessionManager,
 			modelRegistry,
@@ -3770,13 +3832,19 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// but still re-bucket, so live `ttsr.*` filter changes apply to them too.
 			if (hasSession) {
 				const ttsrSettings = cfgTtsr.get(settings);
-				const ruleItems =
+				const reloadedExtensionResources = await logger.time("rediscoverExtensionResources", () =>
+					discoverExtensionResources(extensionRunner, promptCwd, "reload"),
+				);
+				await applyExtensionAgentDirs(reloadedExtensionResources.agentDirs);
+				const ruleItems = mergeExtensionRules(
 					options.rules ??
-					(
-						await logger.time("rediscoverRules", () =>
-							loadCapability<Rule>(ruleCapability.id, { cwd: promptCwd, agentDir }),
-						)
-					).items;
+						(
+							await logger.time("rediscoverRules", () =>
+								loadCapability<Rule>(ruleCapability.id, { cwd: promptCwd, agentDir }),
+							)
+						).items,
+					reloadedExtensionResources.rules,
+				);
 				const buckets = bucketRules(ruleItems, ttsrManager, {
 					builtinRules: ttsrSettings.builtinRules,
 					disabledRules: ttsrSettings.disabledRules,
@@ -4118,7 +4186,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			toolRegistry,
 		);
 
-		const promptTemplates = await promptTemplatesPromise;
+		const promptTemplates = mergeByName(await promptTemplatesPromise, startupExtensionResources.promptTemplates);
 		toolSession.promptTemplates = promptTemplates;
 
 		const slashCommands = await slashCommandsPromise;

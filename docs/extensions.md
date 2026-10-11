@@ -538,8 +538,38 @@ The runtime handles the JSON-RPC transport and its own list/update refresh first
 
 ### `resources_discover`
 
-`resources_discover` exists in extension types and `ExtensionRunner`.
-Current runtime note: `ExtensionRunner.emitResourcesDiscover(...)` is implemented, but there are no `AgentSession` callsites invoking it in the current codebase.
+Contribute resource directories that live outside the standard locations, so an extension can ship its own skills, prompts, agents, rules and advisor guidance:
+
+```ts
+pi.on("resources_discover", event => ({
+	skillPaths: [".my-tool/skills"],
+	promptPaths: [".my-tool/prompts"],
+	agentPaths: [".my-tool/agents"],
+	rulePaths: [".my-tool/rules"],
+	watchdogPaths: [".my-tool/WATCHDOG.md"],
+	themePaths: [".my-tool/themes"],
+}));
+```
+
+When it fires:
+- `reason: "startup"`: once per session, after extensions load and before the system prompt and tool descriptions are built. Subagent sessions run their own extensions, so they emit it too.
+- `reason: "reload"`: on every session rebuild (`/new`, `/clear`).
+
+How the result is used:
+
+| Field | Effect | Refreshed on reload |
+|---|---|---|
+| `skillPaths` | Directories of `<name>/SKILL.md` skills, appended to the session skills. A skill name that is already defined keeps the existing skill. | no |
+| `promptPaths` | Directories of `*.md` prompt templates (`/<name>`), appended after user and project templates | no |
+| `agentPaths` | Directories of task agent definitions. Discovery scans them after project and user `agents/`, so a same-named project or user agent wins. Child sessions inherit them. | yes |
+| `rulePaths` | Directories of rule files (`*.md`, `*.mdc`). They join the rulebook, always-apply and TTSR buckets and resolve as `rule://<name>`. | yes |
+| `watchdogPaths` | `WATCHDOG.md` / `WATCHDOG.yml` / `WATCHDOG.yaml` files. They join advisor discovery as the most specific level, after the project leaf. | no |
+| `themePaths` | Directories of theme JSON files, searched after the custom themes directory (top-level interactive session only) | no |
+
+Path handling:
+- Relative paths resolve against `event.cwd`.
+- Missing paths and paths of the wrong kind are skipped with a debug log.
+- Results from several handlers are concatenated in extension load order.
 
 ## Tool authoring details
 

@@ -45,7 +45,25 @@ describe("Claude Code custom tool discovery", () => {
 		await removeWithRetries(root);
 	});
 
+	/** `.claude/tools/` loading is opt-in (`claude.customTools`). */
+	async function enableClaudeCustomTools(): Promise<void> {
+		resetSettingsForTest();
+		const settings = await Settings.init({ inMemory: true, cwd: project, overrides: { "claude.customTools": true } });
+		initializeWithSettings(settings);
+	}
+
+	test("does not load .claude/tools modules unless claude.customTools is on", async () => {
+		const projectTools = path.join(project, ".claude", "tools");
+		await fs.mkdir(projectTools, { recursive: true });
+		await fs.writeFile(path.join(projectTools, "engine-script.ts"), "process.exit(0);\n");
+
+		const result = await loadCapability<CustomTool>(toolCapability.id, { cwd: project, providers: ["claude"] });
+
+		expect(result.items).toEqual([]);
+	});
+
 	test("discovers only JavaScript and TypeScript modules", async () => {
+		await enableClaudeCustomTools();
 		const userTools = path.join(home, ".claude", "tools");
 		const projectTools = path.join(project, ".claude", "tools");
 		await fs.mkdir(userTools, { recursive: true });

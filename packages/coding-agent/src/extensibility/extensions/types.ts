@@ -777,7 +777,12 @@ export interface ToolInfo {
 // Resource Events
 // ============================================================================
 
-/** Fired after session_start to allow extensions to provide additional resource paths. */
+/**
+ * Fired during session startup, after extensions load and before the system prompt
+ * is built, and again with `reason: "reload"` when a session rebuild re-discovers
+ * resources (`/new`, `/clear`). Returned paths are resolved against `cwd`; missing
+ * paths are skipped.
+ */
 export interface ResourcesDiscoverEvent {
 	type: "resources_discover";
 	cwd: string;
@@ -786,10 +791,34 @@ export interface ResourcesDiscoverEvent {
 
 /** Result from resources_discover event handler */
 export interface ResourcesDiscoverResult {
+	/** Directories scanned for skills (`<name>/SKILL.md`), after the standard skill locations. */
 	skillPaths?: string[];
+	/** Directories scanned for prompt templates (`*.md`, invoked as `/<name>`). */
 	promptPaths?: string[];
+	/** Directories scanned for theme JSON files, after the custom themes directory. */
 	themePaths?: string[];
+	/** Directories scanned for task agent definitions, after project and user `agents/`. */
+	agentPaths?: string[];
+	/** Directories scanned for rule files (`*.md`, `*.mdc`); rules feed the rulebook and TTSR. */
+	rulePaths?: string[];
+	/** `WATCHDOG.md`, `WATCHDOG.yml` or `WATCHDOG.yaml` files joined to advisor discovery as the most specific project level. */
+	watchdogPaths?: string[];
 }
+
+/** The path lists a `resources_discover` handler can contribute. */
+export const RESOURCE_PATH_KEYS = [
+	"skillPaths",
+	"promptPaths",
+	"themePaths",
+	"agentPaths",
+	"rulePaths",
+	"watchdogPaths",
+] as const satisfies readonly (keyof ResourcesDiscoverResult)[];
+
+export type ResourcePathKey = (typeof RESOURCE_PATH_KEYS)[number];
+
+/** Aggregated `resources_discover` output; each path is tagged with its contributing extension. */
+export type ExtensionResourcePaths = Record<ResourcePathKey, Array<{ path: string; extensionPath: string }>>;
 
 // ============================================================================
 // Session Events (shared with hooks subsystem)

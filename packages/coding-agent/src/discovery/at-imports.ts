@@ -10,11 +10,13 @@
  * - `@` must sit at start of line or after whitespace (so `git@github.com`
  *   and `user@example.com` are not treated as imports).
  * - Relative paths resolve against the importing file's directory, not the
- *   working directory.
+ *   working directory. For context files under `<project>/.claude/`, a
+ *   relative import that misses there is retried against `<project>`, which
+ *   is how Claude Code resolves `@.claude/...` references in `.claude/CLAUDE.md`.
  * - `~/...` resolves to the user's home directory.
- * - Imports inside fenced code blocks (` ``` ` / `~~~`) and inline code
- *   spans (`` `…` ``) are preserved verbatim so technical examples like
- *   `npm install @types/node` survive intact.
+ * - Imports inside fenced code blocks (` ``` ` / `~~~`), inline code
+ *   spans (`` `…` ``) and HTML comments (`<!-- … -->`) are preserved verbatim
+ *   so technical examples like `npm install @types/node` survive intact.
  * - Recursive imports are followed up to {@link MAX_AT_IMPORT_DEPTH} hops;
  *   cycles are broken silently.
  * - When the referenced file cannot be read, the original `@token` is
@@ -66,22 +68,39 @@ export async function expandAtImports(
 	filePath: string,
 	options: ExpandAtImportsOptions = {},
 ): Promise<string> {
-	const maxDepth = options.maxDepth ?? MAX_AT_IMPORT_DEPTH;
-	const home = options.home ?? os.homedir();
 	const absoluteSource = path.resolve(filePath);
-	const visited = new Set<string>([absoluteSource]);
-	return await expand(content, path.dirname(absoluteSource), 0, maxDepth, home, visited);
+	const state: ExpandState = {
+		maxDepth: options.maxDepth ?? MAX_AT_IMPORT_DEPTH,
+		home: options.home ?? os.homedir(),
+		visited: new Set<string>([absoluteSource]),
+		fallbackRoot: claudeProjectRoot(path.dirname(absoluteSource)),
+	};
+	return await expand(content, path.dirname(absoluteSource), 0, state);
 }
 
-async function expand(
-	content: string,
-	baseDir: string,
-	depth: number,
-	maxDepth: number,
-	home: string,
-	visited: Set<string>,
-): Promise<string> {
-	if (depth >= maxDepth) return content;
+interface ExpandState {
+	maxDepth: number;
+	home: string;
+	/** Shared across the whole expansion tree to break cycles, even across importing files. */
+	visited: Set<string>;
+	/**
+	 * Project root for context files under `<project>/.claude/`. Claude Code resolves
+	 * imports such as `@.claude/rules/x.md` written in `.claude/CLAUDE.md` against the
+	 * project, so a relative import that misses next to the importing file is retried here.
+	 */
+	fallbackRoot: string | undefined;
+}
+
+/** The directory containing the outermost `.claude` segment of `dir`, if any. */
+function claudeProjectRoot(dir: string): string | undefined {
+	const parts = dir.split(path.sep);
+	const index = parts.indexOf(".claude");
+	if (index <= 0) return undefined;
+	return parts.slice(0, index).join(path.sep) || path.sep;
+}
+
+async function expand(content: string, baseDir: string, depth: number, state: ExpandState): Promise<string> {
+	if (depth >= state.maxDepth) return content;
 
 	const segments = splitMarkdownSegments(content);
 	const out: string[] = [];
@@ -90,34 +109,39 @@ async function expand(
 			out.push(segment.text);
 			continue;
 		}
-		out.push(await expandTextSegment(segment.text, baseDir, depth, maxDepth, home, visited));
+		for (const part of splitHtmlComments(segment.text)) {
+			out.push(part.kind === "comment" ? part.text : await expandTextSegment(part.text, baseDir, depth, state));
+		}
 	}
 	return out.join("");
 }
 
-async function expandTextSegment(
-	text: string,
-	baseDir: string,
-	depth: number,
-	maxDepth: number,
-	home: string,
-	visited: Set<string>,
-): Promise<string> {
+/** Split text into HTML comments (kept verbatim, never expanded) and the text around them. */
+function splitHtmlComments(text: string): Array<{ kind: "text" | "comment"; text: string }> {
+	const parts: Array<{ kind: "text" | "comment"; text: string }> = [];
+	let cursor = 0;
+	while (cursor < text.length) {
+		const open = text.indexOf("<!--", cursor);
+		if (open < 0) break;
+		const close = text.indexOf("-->", open + 4);
+		const end = close < 0 ? text.length : close + 3;
+		if (open > cursor) parts.push({ kind: "text", text: text.slice(cursor, open) });
+		parts.push({ kind: "comment", text: text.slice(open, end) });
+		cursor = end;
+	}
+	if (cursor < text.length) parts.push({ kind: "text", text: text.slice(cursor) });
+	return parts;
+}
+
+async function expandTextSegment(text: string, baseDir: string, depth: number, state: ExpandState): Promise<string> {
 	const lines = text.split("\n");
 	for (let i = 0; i < lines.length; i++) {
-		lines[i] = await expandLine(lines[i], baseDir, depth, maxDepth, home, visited);
+		lines[i] = await expandLine(lines[i], baseDir, depth, state);
 	}
 	return lines.join("\n");
 }
 
-async function expandLine(
-	line: string,
-	baseDir: string,
-	depth: number,
-	maxDepth: number,
-	home: string,
-	visited: Set<string>,
-): Promise<string> {
+async function expandLine(line: string, baseDir: string, depth: number, state: ExpandState): Promise<string> {
 	if (!line.includes("@")) return line;
 
 	const matches: Array<{ start: number; end: number; importPath: string }> = [];
@@ -144,7 +168,7 @@ async function expandLine(
 	let cursor = 0;
 	for (const m of matches) {
 		parts.push(line.slice(cursor, m.start));
-		const expanded = await resolveAndExpand(m.importPath, baseDir, depth, maxDepth, home, visited);
+		const expanded = await resolveAndExpand(m.importPath, baseDir, depth, state);
 		parts.push(expanded ?? line.slice(m.start, m.end));
 		cursor = m.end;
 	}
@@ -156,26 +180,30 @@ async function resolveAndExpand(
 	importPath: string,
 	baseDir: string,
 	depth: number,
-	maxDepth: number,
-	home: string,
-	visited: Set<string>,
+	state: ExpandState,
 ): Promise<string | null> {
-	const resolved = resolveImportPath(importPath, baseDir, home);
-	if (visited.has(resolved)) {
-		logger.debug("@-import: skipping cyclic include", { path: resolved });
-		return null;
+	const candidates = [resolveImportPath(importPath, baseDir, state.home)];
+	if (state.fallbackRoot && isRelativeImport(importPath)) {
+		const fromRoot = path.resolve(state.fallbackRoot, importPath);
+		if (fromRoot !== candidates[0]) candidates.push(fromRoot);
 	}
 
-	const content = await readFile(resolved);
-	if (content === null) {
-		logger.debug("@-import: file not found", { path: resolved });
-		return null;
+	for (const resolved of candidates) {
+		if (state.visited.has(resolved)) {
+			logger.debug("@-import: skipping cyclic include", { path: resolved });
+			return null;
+		}
+		const content = await readFile(resolved);
+		if (content === null) continue;
+		state.visited.add(resolved);
+		return await expand(content, path.dirname(resolved), depth + 1, state);
 	}
+	logger.debug("@-import: file not found", { path: candidates[0] });
+	return null;
+}
 
-	// Visited is shared across the whole expansion tree to break cycles,
-	// even cycles that span multiple importing files.
-	visited.add(resolved);
-	return await expand(content, path.dirname(resolved), depth + 1, maxDepth, home, visited);
+function isRelativeImport(importPath: string): boolean {
+	return importPath !== "~" && !importPath.startsWith("~/") && !path.isAbsolute(importPath);
 }
 
 function resolveImportPath(importPath: string, baseDir: string, home: string): string {

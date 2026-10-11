@@ -159,4 +159,40 @@ describe("expandAtImports", () => {
 
 		expect(expanded).toContain("See INLINED, and then continue.");
 	});
+
+	test("resolves .claude/CLAUDE.md imports against the project when the file-relative path misses", async () => {
+		await writeFile(".claude/rules/method.md", "METHOD @aidlc/memory.md");
+		await writeFile("aidlc/memory.md", "MEMORY");
+		const source = path.join(tmp, ".claude", "CLAUDE.md");
+
+		const expanded = await expandAtImports("Load @.claude/rules/method.md\n", source);
+
+		expect(expanded).toBe("Load METHOD MEMORY\n");
+	});
+
+	test("prefers the file-relative target over the project fallback", async () => {
+		await writeFile(".claude/notes.md", "NEAR");
+		await writeFile("notes.md", "ROOT");
+		const source = path.join(tmp, ".claude", "CLAUDE.md");
+
+		expect(await expandAtImports("@notes.md\n", source)).toBe("NEAR\n");
+	});
+
+	test("does not fall back to the project for files outside .claude", async () => {
+		await writeFile("aidlc/memory.md", "MEMORY");
+		const source = path.join(tmp, "docs", "AGENTS.md");
+		const input = "@aidlc/memory.md\n";
+
+		expect(await expandAtImports(input, source)).toBe(input);
+	});
+
+	test("does not expand inside HTML comments, including multi-line ones", async () => {
+		await writeFile("guide.md", "INLINED");
+		const source = path.join(tmp, "AGENTS.md");
+		const input = "<!-- see @guide.md -->\n<!--\n@guide.md\n-->\n@guide.md\n";
+
+		const expanded = await expandAtImports(input, source);
+
+		expect(expanded).toBe("<!-- see @guide.md -->\n<!--\n@guide.md\n-->\nINLINED\n");
+	});
 });

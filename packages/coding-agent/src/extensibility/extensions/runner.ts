@@ -82,6 +82,7 @@ import type {
 	MessageRenderer,
 	RegisteredCommand,
 	RegisteredTool,
+	ExtensionResourcePaths,
 	ResourcesDiscoverEvent,
 	ResourcesDiscoverResult,
 	SessionBeforeBranchResult,
@@ -101,6 +102,7 @@ import type {
 	UserPythonEvent,
 	UserPythonEventResult,
 } from "./types";
+import { RESOURCE_PATH_KEYS } from "./types";
 
 import { cfgExtensionHandlersToolCallTimeoutMs } from "../settings";
 
@@ -1895,18 +1897,20 @@ export class ExtensionRunner {
 		return undefined;
 	}
 
-	async emitResourcesDiscover(
-		cwd: string,
-		reason: ResourcesDiscoverEvent["reason"],
-	): Promise<{
-		skillPaths: Array<{ path: string; extensionPath: string }>;
-		promptPaths: Array<{ path: string; extensionPath: string }>;
-		themePaths: Array<{ path: string; extensionPath: string }>;
-	}> {
+	/**
+	 * Emit `resources_discover` and aggregate every handler's paths in extension
+	 * load order. Each path is tagged with the contributing extension.
+	 */
+	async emitResourcesDiscover(cwd: string, reason: ResourcesDiscoverEvent["reason"]): Promise<ExtensionResourcePaths> {
 		const ctx = this.createContext();
-		const skillPaths: Array<{ path: string; extensionPath: string }> = [];
-		const promptPaths: Array<{ path: string; extensionPath: string }> = [];
-		const themePaths: Array<{ path: string; extensionPath: string }> = [];
+		const paths: ExtensionResourcePaths = {
+			skillPaths: [],
+			promptPaths: [],
+			themePaths: [],
+			agentPaths: [],
+			rulePaths: [],
+			watchdogPaths: [],
+		};
 
 		for (const ext of this.extensions) {
 			const handlers = ext.handlers.get("resources_discover");
@@ -1922,20 +1926,20 @@ export class ExtensionRunner {
 					extensionHandlerTimeoutMs,
 				);
 				const result = handlerResult as ResourcesDiscoverResult | undefined;
-
-				if (result?.skillPaths?.length) {
-					skillPaths.push(...result.skillPaths.map(path => ({ path, extensionPath: ext.path })));
-				}
-				if (result?.promptPaths?.length) {
-					promptPaths.push(...result.promptPaths.map(path => ({ path, extensionPath: ext.path })));
-				}
-				if (result?.themePaths?.length) {
-					themePaths.push(...result.themePaths.map(path => ({ path, extensionPath: ext.path })));
+				if (!result) continue;
+				for (const key of RESOURCE_PATH_KEYS) {
+					const contributed = result[key];
+					if (!Array.isArray(contributed)) continue;
+					for (const path of contributed) {
+						if (typeof path === "string" && path.trim()) {
+							paths[key].push({ path, extensionPath: ext.path });
+						}
+					}
 				}
 			}
 		}
 
-		return { skillPaths, promptPaths, themePaths };
+		return paths;
 	}
 
 	/** Emit input event. Transforms chain, "handled" short-circuits. */

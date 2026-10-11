@@ -24,6 +24,12 @@ export interface EffectiveExtensionRoots {
 	mode: ExtensionRootMode;
 	configured: readonly string[];
 	configuredLevel: "user" | "project";
+	/**
+	 * Agent definition directories contributed by loaded extensions through
+	 * `resources_discover` `agentPaths` (absolute). Task discovery scans them after
+	 * project and user `agents/`; child sessions inherit them with the provider.
+	 */
+	extensionAgentDirs?: readonly string[];
 }
 
 /**

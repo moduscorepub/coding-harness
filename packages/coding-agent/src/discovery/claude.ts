@@ -34,6 +34,7 @@ import {
 import type { Setting } from "../config/registry";
 
 import {
+	cfgClaudeCustomTools,
 	cfgCommandsEnableClaudeProject,
 	cfgCommandsEnableClaudeUser,
 	cfgSkillsEnableClaudeUser,
@@ -428,6 +429,8 @@ async function loadHooks(ctx: LoadContext): Promise<LoadResult<Hook>> {
 async function loadTools(ctx: LoadContext): Promise<LoadResult<CustomTool>> {
 	const items: CustomTool[] = [];
 	const warnings: string[] = [];
+	// Opt-in (`claude.customTools`): Claude Code itself has no `.claude/tools/` convention.
+	if (!readClaudeUserToggle(cfgClaudeCustomTools)) return { items, warnings };
 
 	const userBase = getUserClaude(ctx);
 	if (userBase) {

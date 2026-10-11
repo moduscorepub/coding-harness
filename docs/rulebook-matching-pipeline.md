@@ -92,6 +92,12 @@ The distinct sticky names allow user and project content to coexist. Native item
 
 Important caveat: `condition` values that look like file globs are converted into `tool:edit(...)` / `tool:write(...)` scope shorthands with catch-all condition `.*`.
 
+### Extension-contributed rules (`resources_discover`)
+
+An extension returns `rulePaths` from `resources_discover` ([extensions](./extensions.md#resources_discover)). Each directory loads through `loadRulesFromDir` (`builtin.ts`), which applies the same `*.{md,mdc}` scan and `discoverRuleFromMarkdown` normalization as native project rules, at project level.
+
+The session merges these rules into the provider results by name: an already discovered rule with the same name wins. It then re-buckets the set with `replaceTtsrRules: true`, so extension rules feed the rulebook, always-apply and TTSR buckets alike. The merge repeats on every session rebuild with a `"reload"` emit, and subagents inherit the merged set through `toolSession.rules`.
+
 ### Agents provider (`agents.ts`)
 
 Loads from both `.agent` and `.agents` directories:

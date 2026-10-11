@@ -110,6 +110,13 @@ export async function discoverAgents(
 	const user = userDirs[0];
 	if (user) orderedDirs.push({ dir: user.path, source: "user" });
 
+	// Directories loaded extensions contributed through `resources_discover`
+	// `agentPaths`. They rank after the user's own agent dirs, so a project or user
+	// definition with the same name overrides an extension's.
+	for (const dir of extensionRoots?.extensionAgentDirs ?? []) {
+		orderedDirs.push({ dir: path.resolve(resolvedCwd, dir), source: "project" });
+	}
+
 	// Extension-package agents use the same effective root set as sibling
 	// skills/hooks/tools, threaded whole so explicit roots and mode survive.
 	const packageRoots = isProviderEnabled("harness-plugins")

@@ -22,7 +22,7 @@
     },
     "packages/agent": {
       "name": "@coding-harness/agent-core",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "dependencies": {
         "@coding-harness/ai": "catalog:",
         "@coding-harness/catalog": "catalog:",
@@ -41,7 +41,7 @@
     },
     "packages/ai": {
       "name": "@coding-harness/ai",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "dependencies": {
         "@coding-harness/catalog": "catalog:",
         "@coding-harness/harnesstype": "catalog:",
@@ -63,7 +63,7 @@
     },
     "packages/catalog": {
       "name": "@coding-harness/catalog",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "dependencies": {
         "@coding-harness/harnesstype": "catalog:",
         "@coding-harness/utils": "catalog:",
@@ -76,7 +76,7 @@
     },
     "packages/coding-agent": {
       "name": "@coding-harness/coding-agent",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "bin": {
         "harness": "src/cli.ts",
       },
@@ -134,7 +134,7 @@
     },
     "packages/harnesstype": {
       "name": "@coding-harness/harnesstype",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "devDependencies": {
         "@ark/attest": "0.56.3",
         "@ark/schema": "0.56.2",
@@ -147,7 +147,7 @@
     },
     "packages/mnemopi": {
       "name": "@coding-harness/mnemopi",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "bin": {
         "mnemopi": "src/cli.ts",
       },
@@ -173,7 +173,7 @@
     },
     "packages/natives": {
       "name": "@coding-harness/natives",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "devDependencies": {
         "@napi-rs/cli": "catalog:",
         "@types/bun": "catalog:",
@@ -188,7 +188,7 @@
     },
     "packages/snapcompact": {
       "name": "@coding-harness/snapcompact",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "dependencies": {
         "@coding-harness/ai": "catalog:",
         "@coding-harness/catalog": "catalog:",
@@ -202,7 +202,7 @@
     },
     "packages/stats": {
       "name": "@coding-harness/harness-stats",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "bin": {
         "harness-stats": "./src/index.ts",
       },
@@ -222,7 +222,7 @@
     },
     "packages/tui": {
       "name": "@coding-harness/tui",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "dependencies": {
         "@coding-harness/agent-core": "catalog:",
         "@coding-harness/ai": "catalog:",
@@ -263,7 +263,7 @@
     },
     "packages/utils": {
       "name": "@coding-harness/utils",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "dependencies": {
         "@coding-harness/natives": "catalog:",
       },
@@ -273,7 +273,7 @@
     },
     "packages/wire": {
       "name": "@coding-harness/wire",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "devDependencies": {
         "@types/bun": "catalog:",
       },
@@ -291,18 +291,18 @@
     "@babel/parser": "^7.29.7",
     "@babel/traverse": "^7.29.7",
     "@babel/types": "^7.29.7",
-    "@coding-harness/agent-core": "1.0.0",
-    "@coding-harness/ai": "1.0.0",
-    "@coding-harness/catalog": "1.0.0",
-    "@coding-harness/coding-agent": "1.0.0",
-    "@coding-harness/harness-stats": "1.0.0",
-    "@coding-harness/harnesstype": "1.0.0",
-    "@coding-harness/mnemopi": "1.0.0",
-    "@coding-harness/natives": "1.0.0",
-    "@coding-harness/snapcompact": "1.0.0",
-    "@coding-harness/tui": "1.0.0",
-    "@coding-harness/utils": "1.0.0",
-    "@coding-harness/wire": "1.0.0",
+    "@coding-harness/agent-core": "1.1.0",
+    "@coding-harness/ai": "1.1.0",
+    "@coding-harness/catalog": "1.1.0",
+    "@coding-harness/coding-agent": "1.1.0",
+    "@coding-harness/harness-stats": "1.1.0",
+    "@coding-harness/harnesstype": "1.1.0",
+    "@coding-harness/mnemopi": "1.1.0",
+    "@coding-harness/natives": "1.1.0",
+    "@coding-harness/snapcompact": "1.1.0",
+    "@coding-harness/tui": "1.1.0",
+    "@coding-harness/utils": "1.1.0",
+    "@coding-harness/wire": "1.1.0",
     "@huggingface/transformers": "^4.2.0",
     "@napi-rs/cli": "3.7.2",
     "@opentelemetry/api": "^1.9.1",

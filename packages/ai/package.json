@@ -1,6 +1,6 @@
 {
 	"name": "@coding-harness/ai",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"description": "Unified LLM API with automatic model discovery and provider configuration",
 	"keywords": [
 		"ai",

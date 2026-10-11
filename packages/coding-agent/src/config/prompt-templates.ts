@@ -72,9 +72,10 @@ export function appendInlineArgsFallback(
 }
 
 /**
- * Recursively scan a directory for .md files (and symlinks to .md files) and load them as prompt templates
+ * Recursively scan a directory for .md files (and symlinks to .md files) and load them as prompt templates.
+ * Also used for extension-contributed prompt directories (`resources_discover` `promptPaths`).
  */
-async function loadTemplatesFromDir(
+export async function loadTemplatesFromDir(
 	dir: string,
 	source: "user" | "project",
 	subdir: string = "",

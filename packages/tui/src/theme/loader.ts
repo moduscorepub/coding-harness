@@ -25,18 +25,34 @@ export function getBuiltinThemes(): Record<string, ThemeJson> {
 	return BUILTIN_THEMES;
 }
 
-export async function getAvailableThemes(): Promise<string[]> {
-	const themes = new Set<string>(Object.keys(getBuiltinThemes()));
-	const customThemesDir = getCustomThemesDir();
+let extensionThemeDirs: readonly string[] = [];
+
+/**
+ * Register theme directories contributed by extensions (`resources_discover`
+ * `themePaths`). They are searched after the user's custom themes directory,
+ * so a user theme with the same name wins.
+ */
+export function setExtensionThemeDirs(dirs: readonly string[]): void {
+	extensionThemeDirs = [...new Set(dirs)];
+}
+
+function themeSearchDirs(): string[] {
+	return [getCustomThemesDir(), ...extensionThemeDirs];
+}
+
+function readThemeFileNames(dir: string): string[] {
 	try {
-		const files = await fs.promises.readdir(customThemesDir);
-		for (const file of files) {
-			if (file.endsWith(".json")) {
-				themes.add(file.slice(0, -5));
-			}
-		}
+		return fs.readdirSync(dir).filter(file => file.endsWith(".json"));
 	} catch {
 		// Directory doesn't exist or isn't readable
+		return [];
+	}
+}
+
+export async function getAvailableThemes(): Promise<string[]> {
+	const themes = new Set<string>(Object.keys(getBuiltinThemes()));
+	for (const dir of themeSearchDirs()) {
+		for (const file of readThemeFileNames(dir)) themes.add(file.slice(0, -5));
 	}
 	return Array.from(themes).sort();
 }
@@ -54,23 +70,25 @@ export async function getAvailableThemesWithPaths(): Promise<ThemeInfo[]> {
 		result.push({ name, path: undefined });
 	}
 
-	// Custom themes
-	const customThemesDir = getCustomThemesDir();
-	try {
-		const files = await fs.promises.readdir(customThemesDir);
-		for (const file of files) {
-			if (file.endsWith(".json")) {
-				const name = file.slice(0, -5);
-				if (!result.some(themeInfo => themeInfo.name === name)) {
-					result.push({ name, path: path.join(customThemesDir, file) });
-				}
+	// Custom themes, then extension-contributed themes; the first definition of a name wins.
+	for (const dir of themeSearchDirs()) {
+		for (const file of readThemeFileNames(dir)) {
+			const name = file.slice(0, -5);
+			if (!result.some(themeInfo => themeInfo.name === name)) {
+				result.push({ name, path: path.join(dir, file) });
 			}
 		}
-	} catch {
-		// Directory doesn't exist or isn't readable
 	}
 
 	return result.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function findThemeFile(name: string): string | undefined {
+	for (const dir of themeSearchDirs()) {
+		const candidate = path.join(dir, `${name}.json`);
+		if (fs.existsSync(candidate)) return candidate;
+	}
+	return undefined;
 }
 
 function parseThemeJson(name: string, content: string): ThemeJson {
@@ -111,8 +129,8 @@ export async function loadThemeJson(name: string): Promise<ThemeJson> {
 	if (name in builtinThemes) {
 		return builtinThemes[name];
 	}
-	const customThemesDir = getCustomThemesDir();
-	const themePath = path.join(customThemesDir, `${name}.json`);
+	const themePath = findThemeFile(name);
+	if (!themePath) throw new Error(`Theme not found: ${name}`);
 	try {
 		return parseThemeJson(name, await Bun.file(themePath).text());
 	} catch (error) {
@@ -127,7 +145,8 @@ export function loadThemeJsonSync(name: string): ThemeJson {
 	if (name in builtinThemes) {
 		return builtinThemes[name];
 	}
-	const themePath = path.join(getCustomThemesDir(), `${name}.json`);
+	const themePath = findThemeFile(name);
+	if (!themePath) throw new Error(`Theme not found: ${name}`);
 	try {
 		return parseThemeJson(name, fs.readFileSync(themePath, "utf8"));
 	} catch (error) {

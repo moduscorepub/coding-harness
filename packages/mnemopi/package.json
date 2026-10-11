@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@coding-harness/mnemopi",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Local SQLite memory engine for harness agents",
   "homepage": "https://coding-harness.invalid",
   "author": { "name": "Moduscore", "url": "https://coding-harness.invalid" },

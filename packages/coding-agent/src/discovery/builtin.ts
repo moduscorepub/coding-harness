@@ -3,6 +3,7 @@
  *
  * Primary provider for Harness native configs. Supports all capabilities.
  */
+import * as os from "node:os";
 import * as path from "node:path";
 import { getAgentDir, logger, normalizePathForComparison, parseFrontmatter, tryParseJson } from "@coding-harness/utils";
 import { YAML } from "bun";
@@ -386,17 +387,32 @@ registerProvider<SlashCommand>(slashCommandCapability.id, {
 });
 
 // Rules
+const RULE_FILE_OPTIONS = {
+	extensions: ["md", "mdc"],
+	transform: (
+		name: string,
+		content: string,
+		filePath: string,
+		source: Parameters<typeof discoverRuleFromMarkdown>[3],
+	) => discoverRuleFromMarkdown(name, content, filePath, source, { stripNamePattern: /\.(md|mdc)$/ }),
+};
+
+/**
+ * Load rule files (`*.md`, `*.mdc`) from one explicit directory at project level,
+ * such as a directory an extension contributes through `resources_discover`.
+ */
+export async function loadRulesFromDir(dir: string, cwd: string): Promise<LoadResult<Rule>> {
+	const ctx: LoadContext = { cwd, home: os.homedir(), repoRoot: null };
+	return loadFilesFromDir<Rule>(ctx, dir, PROVIDER_ID, "project", RULE_FILE_OPTIONS);
+}
+
 async function loadRules(ctx: LoadContext): Promise<LoadResult<Rule>> {
 	const items: Rule[] = [];
 	const warnings: string[] = [];
 
 	for (const { dir, level } of await getConfigDirs(ctx)) {
 		const rulesDir = path.join(dir, "rules");
-		const result = await loadFilesFromDir<Rule>(ctx, rulesDir, PROVIDER_ID, level, {
-			extensions: ["md", "mdc"],
-			transform: (name, content, path, source) =>
-				discoverRuleFromMarkdown(name, content, path, source, { stripNamePattern: /\.(md|mdc)$/ }),
-		});
+		const result = await loadFilesFromDir<Rule>(ctx, rulesDir, PROVIDER_ID, level, RULE_FILE_OPTIONS);
 		items.push(...result.items);
 		if (result.warnings) warnings.push(...result.warnings);
 	}
