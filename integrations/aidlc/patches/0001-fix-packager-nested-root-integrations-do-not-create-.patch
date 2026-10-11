@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
+Date: Sun, 11 Oct 2026 23:25:37 +0100
+Subject: [PATCH 1/8] fix(packager): nested root integrations do not create
+ managed directories
+
+A top-level projection directory that holds only nested root-integration
+files (for example .harness/extensions/aidlc.ts) belongs to the user, not
+the framework. Classify it as an integration parent instead of a managed
+directory; the runtime validator already accepts such parents.
+---
+ scripts/package.ts | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/scripts/package.ts b/scripts/package.ts
+index 4fd565dd6e745f6d8a203e2827a77c6f19bbd497..f478afdae906bcd1f9079b0b40ccd0d5165f216b 100644
+--- a/scripts/package.ts
++++ b/scripts/package.ts
+@@ -599,6 +599,16 @@ function writeSettingsSchemaData(treeRoot: string): void {
+   writeFileSync(dst, `${JSON.stringify(AIDLC_SETTINGS_SCHEMA, null, 2)}\n`);
+ }
+ 
++/** Every file below `dir`, relative to it with `/` separators. */
++function projectedFiles(dir: string): string[] {
++  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
++    if (entry.isDirectory()) {
++      return projectedFiles(join(dir, entry.name)).map((file) => `${entry.name}/${file}`);
++    }
++    return [entry.name];
++  });
++}
++
+ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManifest): void {
+   const rootIntegrationPaths = new Set(m.rootIntegrations.map((item) => item.path));
+   if (rootIntegrationPaths.size !== m.rootIntegrations.length) {
+@@ -609,9 +619,17 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
+       throw new Error(`[${m.name}] root integration is not projected: ${integration.path}`);
+     }
+   }
++  // A top-level directory that holds nothing but nested root-integration files
++  // (for example `.harness/extensions/aidlc.ts`) is an integration parent the
++  // user owns, not a framework-managed directory.
++  const integrationOnlyParent = (entry: string): boolean => {
++    const files = projectedFiles(join(outRoot, entry)).map((file) => `${entry}/${file}`);
++    return files.length > 0 && files.every((file) => rootIntegrationPaths.has(file));
++  };
+   const managedDirectories = readdirSync(outRoot)
+     .filter((entry) => statSync(join(outRoot, entry)).isDirectory())
+     .filter((entry) => !rootIntegrationPaths.has(entry))
++    .filter((entry) => !integrationOnlyParent(entry))
+     .sort();
+   const allowedTopLevel = new Set([
+     ...managedDirectories,

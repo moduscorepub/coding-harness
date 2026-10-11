@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
+Date: Sun, 11 Oct 2026 23:54:58 +0100
+Subject: [PATCH 8/8] feat(release): harness in release verification and binary
+ gates
+
+verify-release expects the harness runtime tree; the compiled binary's
+smoke run resolves harness sensors and runners and probes a harness-only
+install through the doctor's bootstrap check.
+---
+ scripts/build-binaries.ts | 6 ++++++
+ scripts/verify-release.ts | 1 +
+ 2 files changed, 7 insertions(+)
+
+diff --git a/scripts/build-binaries.ts b/scripts/build-binaries.ts
+index 5cd023a0a3b0964a4ca54661cc266b8a2c7f1ecf..4a009ed8b9f5114b2b9bf54e4e414d01c466d4ca 100644
+--- a/scripts/build-binaries.ts
++++ b/scripts/build-binaries.ts
+@@ -2289,6 +2289,7 @@ function buildTarget(target: TargetConfig): TargetResult {
+     result.gates.push(harnessRuntimeGate(actual.artifact, "kiro-ide", ".kiro"));
+     result.gates.push(harnessRuntimeGate(actual.artifact, "copilot", ".aidlc"));
+     result.gates.push(harnessRuntimeGate(actual.artifact, "opencode", ".aidlc"));
++    result.gates.push(harnessRuntimeGate(actual.artifact, "harness", ".harness-aidlc"));
+     result.gates.push(harnessProbeGate(
+       actual.artifact,
+       "kiro",
+@@ -2304,6 +2305,11 @@ function buildTarget(target: TargetConfig): TargetResult {
+       "opencode",
+       "opencode.json or opencode.jsonc present",
+     ));
++    result.gates.push(harnessProbeGate(
++      actual.artifact,
++      "harness",
++      ".harness/extensions/aidlc.ts present (bootstrap the harness auto-loads)",
++    ));
+     result.gates.push(compiledKiroNewWorkRoutingGate(actual.artifact));
+     result.gates.push(pluginSelectGate(actual.artifact));
+     result.gates.push(delegatePluginSyncGate(actual.artifact));
+diff --git a/scripts/verify-release.ts b/scripts/verify-release.ts
+index cfeff96d3f5a16f519fdd16014e1328526ea8d0f..d95e42028295d0413a854d5e4ab0ed6336da797d 100644
+--- a/scripts/verify-release.ts
++++ b/scripts/verify-release.ts
+@@ -21,6 +21,7 @@ const RELEASE_DISTRIBUTIONS = [
+   "codex",
+   "copilot",
+   "cursor",
++  "harness",
+   "kiro",
+   "kiro-ide",
+   "opencode",

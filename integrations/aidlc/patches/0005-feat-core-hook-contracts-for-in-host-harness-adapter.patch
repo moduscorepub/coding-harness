@@ -1,0 +1,508 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
+Date: Sun, 11 Oct 2026 23:40:17 +0100
+Subject: [PATCH 5/8] feat(core): hook contracts for in-host harness adapter
+
+- run-sensors: AIDLC_SENSOR_FEEDBACK=1 prints the dispatcher's verdicts as
+  one {"sensor_feedback":[...]} stdout line so an in-host adapter can show
+  sensor results to the model; default output is unchanged.
+- continue-workflow: recognise Coding Harness session transcripts (session
+  header line) for the conversational-stop carve-out and the turn-end usage
+  fold.
+- usage: read harness sessions (usage.{input,output,cacheRead,cacheWrite},
+  responseId grouping, reported cost when the rate table has no row) plus
+  nested subagent/advisor transcripts, attributed from the parent's task
+  calls.
+- includes: repoint .harness-aidlc/host/includes.json and persona method
+  paths on a space switch.
+- runner-gen restart guidance and the learnings distribution guard know the
+  harness tree.
+---
+ core/hooks/aidlc-continue-workflow.ts |  56 +++++++-
+ core/hooks/aidlc-run-sensors.ts       |  33 +++++
+ core/tools/aidlc-includes.ts          |  35 +++++
+ core/tools/aidlc-learnings.ts         |   3 +-
+ core/tools/aidlc-runner-gen.ts        |   2 +
+ core/tools/aidlc-usage.ts             | 190 ++++++++++++++++++++++++--
+ 6 files changed, 302 insertions(+), 17 deletions(-)
+
+diff --git a/core/hooks/aidlc-continue-workflow.ts b/core/hooks/aidlc-continue-workflow.ts
+index ac1821c947884d28c4489a2b7840a9c87c83dbe1..fb32cda101f9792ea3660f8d616597395016acb0 100644
+--- a/core/hooks/aidlc-continue-workflow.ts
++++ b/core/hooks/aidlc-continue-workflow.ts
+@@ -164,6 +164,7 @@ import {
+ import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
+ import {
+   foldTranscriptIntoLedger,
++  isHarnessSessionTranscript,
+   writeCurrentTranscriptPath,
+ } from "../tools/aidlc-usage.ts";
+ import { questionsFileHasPendingPlanApproval } from "./aidlc-plan-approval-guard.ts";
+@@ -786,10 +787,12 @@ function isInjectedHookFeedback(text: string): boolean {
+ }
+ 
+ // Read the transcript and classify the ending turn as conversational. Supports
+-// both delivered formats; returns true ONLY with positive evidence. `format`
+-// distinguishes Claude's message-shaped JSONL from Codex's {type,payload}
+-// rollout. Fail-closed on every miss.
+-function transcriptIsConversational(transcriptPath: string, format: "claude" | "codex", projectDir: string): boolean {
++// every delivered format; returns true ONLY with positive evidence. `format`
++// distinguishes Claude's message-shaped JSONL, Codex's {type,payload} rollout
++// and the Coding Harness session JSONL. Fail-closed on every miss.
++type TranscriptFormat = "claude" | "codex" | "harness";
++
++function transcriptIsConversational(transcriptPath: string, format: TranscriptFormat, projectDir: string): boolean {
+   let raw: string;
+   try {
+     raw = readFileSync(transcriptPath, "utf-8");
+@@ -910,6 +913,44 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
+           turns.push({ role: "assistant", engineCall: false, humanPrompt: false });
+         }
+       }
++    } else if (format === "harness") {
++      // Coding Harness session JSONL: {type:"message", message:{role, content}}.
++      // role "user" text is the human (minus the hook's own re-injected
++      // continuation); assistant `toolCall` blocks are calls; role "toolResult"
++      // entries carry their results. Custom/hidden entries are not messages.
++      if (entry.type !== "message") continue;
++      const message = entry.message as Record<string, unknown> | undefined;
++      if (!message) continue;
++      const content = message.content;
++      if (message.role === "user") {
++        const asText =
++          typeof content === "string"
++            ? content
++            : Array.isArray(content)
++              ? content
++                  .map((x) => {
++                    const b = x as Record<string, unknown>;
++                    return b?.type === "text" ? String(b.text ?? "") : "";
++                  })
++                  .join("")
++              : "";
++        if (isInjectedHookFeedback(asText)) continue;
++        if (asText.trim().length > 0) turns.push({ role: "user", engineCall: false, humanPrompt: true });
++      } else if (message.role === "assistant" && Array.isArray(content)) {
++        let hasToolCall = false;
++        for (const block of content) {
++          const b = block as Record<string, unknown>;
++          if (b?.type === "toolCall") {
++            recordCall(b.id, String(b.name ?? ""), b.arguments);
++            hasToolCall = true;
++          }
++        }
++        if (!hasToolCall) {
++          turns.push({ role: "assistant", engineCall: false, humanPrompt: false });
++        }
++      } else if (message.role === "toolResult") {
++        recordResult(message.toolCallId, message.content, message.isError);
++      }
+     } else {
+       // Codex rollout JSONL: {type:"response_item", payload:{type, role, content,
+       // name, ...}}. function_call entries carry the tool name/arguments.
+@@ -1064,7 +1105,7 @@ function isConversationalStop(
+   projectDir: string,
+   stateContent: string,
+   transcriptPath: string | null,
+-  format: "claude" | "codex",
++  format: TranscriptFormat,
+   copilotSession = "",
+ ): boolean {
+   try {
+@@ -1348,7 +1389,7 @@ let rawSessionId = earlyRawSessionId;
+ // shaped JSONL. Default to Claude; switch to Codex when the path looks like a
+ // Codex rollout. (Both readers fail-closed, so a misclassification can only ever
+ // return false and fall through to the cap, never a false allow.)
+-let transcriptFormat: "claude" | "codex" = "claude";
++let transcriptFormat: TranscriptFormat = "claude";
+ try {
+   const raw: unknown = JSON.parse(input);
+   if (raw !== null && typeof raw === "object") {
+@@ -1361,6 +1402,7 @@ try {
+     if (typeof obj.transcript_path === "string" && obj.transcript_path.length > 0) {
+       transcriptPath = obj.transcript_path;
+       if (/[/\\]rollout-[^/\\]*\.jsonl$/.test(transcriptPath)) transcriptFormat = "codex";
++      else if (isHarnessSessionTranscript(transcriptPath)) transcriptFormat = "harness";
+     }
+   }
+ } catch {
+@@ -1412,7 +1454,7 @@ if (sessionId) {
+ // transcripts are folded (the reader is Claude-format-specific); a Codex rollout
+ // path is left alone. currentStage is the same Current Stage slug the rest of
+ // this hook reads; null when absent so byStage isn't polluted.
+-if (transcriptPath && transcriptFormat === "claude") {
++if (transcriptPath && (transcriptFormat === "claude" || transcriptFormat === "harness")) {
+   try {
+     writeCurrentTranscriptPath(projectDir, sessionId, transcriptPath);
+     const currentStage = currentStageSlug(stateContent) || null;
+diff --git a/core/hooks/aidlc-run-sensors.ts b/core/hooks/aidlc-run-sensors.ts
+index 83b277cf2ab00884011d85307df7fed6c57011d7..262c89f5f4ce0f696de9aa3d7107e1cba089af78 100644
+--- a/core/hooks/aidlc-run-sensors.ts
++++ b/core/hooks/aidlc-run-sensors.ts
+@@ -206,6 +206,12 @@ if (applicableSensors.length === 0) return 0;
+ // upstream dispatcher's bespoke globToRegex rejects the *.md form even though
+ // Bun.Glob accepts both — both engines agree on the relaxed form.
+ const sensorTs = join(projectDir, harnessDir(), "tools", "aidlc-sensor.ts");
++// AIDLC_SENSOR_FEEDBACK=1: an in-host adapter asked for the dispatcher's
++// machine-readable verdicts so it can show them to the model. They are printed
++// as ONE stdout line after every fire; audit rows and state are unchanged, and
++// without the variable stdout stays empty.
++const feedback = process.env.AIDLC_SENSOR_FEEDBACK === "1";
++const verdicts: Record<string, unknown>[] = [];
+ for (const entry of applicableSensors) {
+   // Gate-fired sensors run once per existing deliverable at gate-start. Older
+   // compiled graphs omit fire_on, which preserves the historical write default.
+@@ -278,6 +284,8 @@ for (const entry of applicableSensors) {
+         "run-sensors",
+         `${entry.id}: dispatcher exit ${result.status}${stderr ? `: ${stderr}` : ""}`
+       );
++    } else if (feedback) {
++      verdicts.push(...fireVerdicts(result.stdout?.toString() ?? ""));
+     }
+   } catch (e: unknown) {
+     // Thrown error from spawnSync itself — not from the child process.
+@@ -290,9 +298,34 @@ for (const entry of applicableSensors) {
+ }
+ 
+ // Step 12 — exit 0 (advisory always per G5).
++if (feedback && verdicts.length > 0) {
++  process.stdout.write(`${JSON.stringify({ sensor_feedback: verdicts })}\n`);
++}
+ return 0;
+ }
+ 
++/** The dispatcher's FireVerdict lines (`{fire_id, sensor_id, …}`) in its stdout. */
++export function fireVerdicts(stdout: string): Record<string, unknown>[] {
++  const verdicts: Record<string, unknown>[] = [];
++  for (const line of stdout.split("\n")) {
++    const trimmed = line.trim();
++    if (!trimmed.startsWith("{")) continue;
++    try {
++      const parsed = JSON.parse(trimmed) as unknown;
++      if (
++        parsed && typeof parsed === "object" && !Array.isArray(parsed) &&
++        typeof (parsed as Record<string, unknown>).fire_id === "string" &&
++        typeof (parsed as Record<string, unknown>).sensor_id === "string"
++      ) {
++        verdicts.push(parsed as Record<string, unknown>);
++      }
++    } catch {
++      // Not a verdict line.
++    }
++  }
++  return verdicts;
++}
++
+ if (import.meta.main) {
+   process.exit(await run(await Bun.stdin.text()));
+ }
+diff --git a/core/tools/aidlc-includes.ts b/core/tools/aidlc-includes.ts
+index f6a7fbf5cbc9a1e716c331b79bbe1d2c8aa84c1f..d32e667656a4e9a95071e8ef664a42b7fa3f4fea 100644
+--- a/core/tools/aidlc-includes.ts
++++ b/core/tools/aidlc-includes.ts
+@@ -354,10 +354,45 @@ export function repointHarnessIncludes(projectDir: string, space?: string): stri
+     return written;
+   }
+ 
++  if (harness === ".harness-aidlc") {
++    // Coding Harness: the adapter injects the method files host/includes.json
++    // lists from its `memory` directory; repoint that directory. The inline
++    // persona twins (.harness-aidlc/agents) and the harness task agents
++    // (.harness-aidlc/host/agents) carry explicit method paths like opencode's.
++    const includesPath = join(harnessRoot, "host", "includes.json");
++    if (existsSync(includesPath)) {
++      const raw = readSafe(includesPath);
++      if (raw !== null) {
++        repointFile(includesPath, join(harness, "host", "includes.json"), raw, sp, repointHarnessIncludesJson, written);
++      }
++    }
++    for (const relDir of [join(harness, "agents"), join(harness, "host", "agents")]) {
++      const agentsDir = join(projectDir, relDir);
++      if (!existsSync(agentsDir)) continue;
++      for (const name of readdirSync(agentsDir).sort()) {
++        if (!name.endsWith(".md")) continue;
++        const p = join(agentsDir, name);
++        const raw = readSafe(p);
++        if (raw === null) continue;
++        repointFile(p, join(relDir, name), raw, sp, repointOpencodeAgentMemory, written);
++      }
++    }
++    return written;
++  }
++
+   // Unknown / future harness with no native include known here — nothing to do.
+   return written;
+ }
+ 
++/** Point host/includes.json `memory` at the space's method tree; null when already there. */
++export function repointHarnessIncludesJson(raw: string, space: string): string | null {
++  const parsed = JSON.parse(raw) as Record<string, unknown>;
++  if (!parsed || typeof parsed !== "object" || typeof parsed.memory !== "string") return null;
++  const memory = `aidlc/spaces/${space}/memory`;
++  if (parsed.memory === memory) return null;
++  return `${JSON.stringify({ ...parsed, memory }, null, 2)}\n`;
++}
++
+ function readSafe(path: string): string | null {
+   try {
+     return readFileSync(path, "utf-8");
+diff --git a/core/tools/aidlc-learnings.ts b/core/tools/aidlc-learnings.ts
+index e1bffd6d34c791c5adf6d574e34051788517b2ee..105b25e5834c29a1b13b41aabbe47973bb218976 100644
+--- a/core/tools/aidlc-learnings.ts
++++ b/core/tools/aidlc-learnings.ts
+@@ -1058,7 +1058,8 @@ function isFrameworkDistributionPath(path: string): boolean {
+     path.includes(join("dist", "kiro", ".kiro", "sensors")) ||
+     path.includes(join("dist", "codex", ".codex", "sensors")) ||
+     path.includes(join("dist", "opencode", ".aidlc", "sensors")) ||
+-    path.includes(join("dist", "cursor", ".cursor", "sensors"))
++    path.includes(join("dist", "cursor", ".cursor", "sensors")) ||
++    path.includes(join("dist", "harness", ".harness-aidlc", "sensors"))
+   );
+ }
+ 
+diff --git a/core/tools/aidlc-runner-gen.ts b/core/tools/aidlc-runner-gen.ts
+index dc65f78b1bd8182cf1d11ce39cd1d065f4769487..12a0344544524db237e208721e3197c3b0db3732 100644
+--- a/core/tools/aidlc-runner-gen.ts
++++ b/core/tools/aidlc-runner-gen.ts
+@@ -609,9 +609,11 @@ export function renderRunner(scope: string, description: string): string {
+     if (harnessName === "copilot") {
+       return "start a new Copilot CLI session or open a new VS Code agent chat";
+     }
++    if (harnessName === "harness") return "start a fresh session with `/new` (or exit and restart `harness`)";
+     if (harnessName === "cursor") return "start a new Cursor chat session";
+     if (activeHarnessDir === ".claude") return "use `/clear` (or restart Claude Code)";
+     if (activeHarnessDir === ".codex") return "exit or restart Codex CLI and start a new session";
++    if (activeHarnessDir === ".harness-aidlc") return "start a fresh session with `/new` (or exit and restart `harness`)";
+     if (activeHarnessDir === ".kiro") {
+       return "start a new Kiro CLI session or open a new Kiro IDE chat";
+     }
+diff --git a/core/tools/aidlc-usage.ts b/core/tools/aidlc-usage.ts
+index 74022ffa8ac0a0a45ba5db29731d2aded7e610d2..2e9454aff46419efd86dcb93b1cdadbe024695bf 100644
+--- a/core/tools/aidlc-usage.ts
++++ b/core/tools/aidlc-usage.ts
+@@ -365,13 +365,19 @@ function parseTranscriptLine(
+   if (message.role !== "assistant") return null;
+   const usage = message.usage as Record<string, unknown> | undefined;
+   if (!usage || typeof usage !== "object") return null;
+-  const counts = countsFromUsage(usage);
++  // Coding Harness session lines carry `usage.{input, output, cacheRead,
++  // cacheWrite, cost}` (one line per LLM call); Claude lines carry the
++  // `*_tokens` fields and may split one call across several lines.
++  const harnessShape = obj.type === "message" && !("input_tokens" in usage) && typeof usage.input === "number";
++  const counts = harnessShape ? countsFromHarnessUsage(usage) : countsFromUsage(usage);
+   const model = typeof message.model === "string" ? message.model : "";
+   const agentId =
+     typeof obj.agentId === "string" ? obj.agentId : fallbackAgentId;
+   return {
+-    uuid: typeof obj.uuid === "string" ? obj.uuid : "",
+-    msgId: typeof message.id === "string" ? message.id : "",
++    uuid: typeof obj.uuid === "string" ? obj.uuid : typeof obj.id === "string" ? obj.id : "",
++    msgId: harnessShape
++      ? typeof message.responseId === "string" ? message.responseId : ""
++      : typeof message.id === "string" ? message.id : "",
+     timestamp: typeof obj.timestamp === "string" ? obj.timestamp : "",
+     model,
+     isSidechain: obj.isSidechain === true,
+@@ -379,10 +385,33 @@ function parseTranscriptLine(
+     agentId,
+     agentType: null,
+     counts,
+-    usd: computeCost(counts, model).usd,
++    usd: computeCost(counts, model).usd ?? (harnessShape ? harnessReportedCost(usage) : null),
+   };
+ }
+ 
++// Coding Harness usage: `cacheWrite` is the total cache creation; the 1h share
++// arrives as `cttl.ephemeral1h` when the provider reports it.
++function countsFromHarnessUsage(usage: Record<string, unknown>): TokenCounts {
++  const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
++  const cttl = (usage.cttl ?? {}) as Record<string, unknown>;
++  const write = num(usage.cacheWrite);
++  const oneHour = Math.min(num(cttl.ephemeral1h), write);
++  return {
++    input: num(usage.input),
++    output: num(usage.output),
++    cacheCreate5m: write - oneHour,
++    cacheCreate1h: oneHour,
++    cacheRead: num(usage.cacheRead),
++  };
++}
++
++// The harness prices every call it makes, including models outside the AI-DLC
++// rate table; use that figure when the table has no entry for the model.
++function harnessReportedCost(usage: Record<string, unknown>): number | null {
++  const cost = usage.cost as Record<string, unknown> | undefined;
++  return typeof cost?.total === "number" && Number.isFinite(cost.total) ? cost.total : null;
++}
++
+ // covers: function:dedupeByMessageId
+ // Collapse the split-line overcount (the CRITICAL bug): Claude Code writes one
+ // llm call (one `message.id`) as MULTIPLE contiguous JSONL lines - one per
+@@ -548,12 +577,132 @@ export function readClaudeSession(mainPath: string): UsageRow[] {
+   return attributeAgents(rows, metaByAgentId);
+ }
+ 
+-// Sniff the transcript format from its first non-empty line and dispatch.
+-// Claude lines carry `message`/`uuid` => readClaudeSession. Any other shape
+-// (empty, non-Claude) => []. Only the Claude Code transcript format is
+-// supported - Kiro/Codex/opencode wire no producer, so their transcripts (if
+-// any) are never read here.
++// ---------------------------------------------------------------------------
++// Coding Harness sessions: `<sessions>/<cwd>/<ts>_<id>.jsonl` opens with a
++// `{"type":"title"}` line and a `{"type":"session","version":N,"cwd":…}`
++// header. Subagent and advisor transcripts live beside it in
++// `<ts>_<id>/<agent id>.jsonl` (`__advisor*.jsonl` for advisors), nested one
++// directory deeper for each further delegation level.
++// ---------------------------------------------------------------------------
++
++/** True when `path` is a Coding Harness session transcript. Reads only the first lines. */
++export function isHarnessSessionTranscript(path: string): boolean {
++  let head: string;
++  try {
++    head = readFileSync(path, "utf-8").slice(0, 8192);
++  } catch {
++    return false;
++  }
++  for (const line of head.split("\n").slice(0, 4)) {
++    const trimmed = line.trim();
++    if (!trimmed) continue;
++    try {
++      const obj = JSON.parse(trimmed) as Record<string, unknown>;
++      if (obj.type === "session" && typeof obj.version === "number" && typeof obj.cwd === "string") return true;
++    } catch {
++      return false;
++    }
++  }
++  return false;
++}
++
++export type HarnessSubagentFile = { path: string; sourceKey: string; agentId: string };
++
++/** Every subagent/advisor transcript below a harness session, depth-first, sorted. */
++export function harnessSubagentFiles(mainPath: string): HarnessSubagentFile[] {
++  const root = mainPath.replace(/\.jsonl$/, "");
++  const files: HarnessSubagentFile[] = [];
++  const walk = (dir: string, prefix: string): void => {
++    let entries: string[];
++    try {
++      entries = readdirSync(dir).sort();
++    } catch {
++      return;
++    }
++    for (const name of entries) {
++      const full = join(dir, name);
++      if (name.endsWith(".jsonl")) {
++        const id = name.replace(/\.jsonl$/, "");
++        files.push({ path: full, sourceKey: `agent-${prefix}${id}`, agentId: `${prefix}${id}` });
++        walk(full.replace(/\.jsonl$/, ""), `${prefix}${id}/`);
++      }
++    }
++  };
++  walk(root, "");
++  return files;
++}
++
++/**
++ * Agent type per subagent id. Advisors are `advisor`; task subagents take the
++ * agent their parent's `task` call named, matched on the task name the harness
++ * puts after the spawn index (`0-Explore` → `Explore`).
++ */
++export function harnessAgentTypes(mainPath: string, files: HarnessSubagentFile[]): Record<string, string> {
++  const agentByTaskName: Record<string, string> = {};
++  const collect = (path: string): void => {
++    let raw: string;
++    try {
++      raw = readFileSync(path, "utf-8");
++    } catch {
++      return;
++    }
++    for (const line of raw.split("\n")) {
++      if (!line.includes("\"toolCall\"")) continue;
++      let obj: Record<string, unknown>;
++      try {
++        obj = JSON.parse(line) as Record<string, unknown>;
++      } catch {
++        continue;
++      }
++      const content = (obj.message as Record<string, unknown> | undefined)?.content;
++      if (!Array.isArray(content)) continue;
++      for (const block of content) {
++        const b = block as Record<string, unknown>;
++        if (b?.type !== "toolCall" || b.name !== "task") continue;
++        const args = (b.arguments ?? {}) as Record<string, unknown>;
++        const items = Array.isArray(args.tasks) ? args.tasks : [args];
++        for (const item of items) {
++          const record = item as Record<string, unknown>;
++          if (typeof record?.name === "string" && typeof record.agent === "string") {
++            agentByTaskName[record.name] = record.agent;
++          }
++        }
++      }
++    }
++  };
++  collect(mainPath);
++  for (const file of files) collect(file.path);
++  const types: Record<string, string> = {};
++  for (const file of files) {
++    const leaf = file.agentId.split("/").pop() ?? file.agentId;
++    if (leaf.startsWith("__advisor")) {
++      types[file.agentId] = "advisor";
++      continue;
++    }
++    const taskName = leaf.replace(/^\d+-/, "");
++    const agent = agentByTaskName[taskName] ?? agentByTaskName[leaf];
++    if (agent) types[file.agentId] = agent;
++  }
++  return types;
++}
++
++/** Read a harness session: the main transcript plus every subagent/advisor transcript. */
++export function readHarnessSession(mainPath: string): UsageRow[] {
++  const rows = readClaudeTranscript(mainPath, { sourceKey: "main", agentId: null });
++  const files = harnessSubagentFiles(mainPath);
++  for (const file of files) {
++    rows.push(...readClaudeTranscript(file.path, { sourceKey: file.sourceKey, agentId: file.agentId }));
++  }
++  return attributeAgents(rows, harnessAgentTypes(mainPath, files));
++}
++
++// Sniff the transcript format and dispatch. A Coding Harness session header
++// => readHarnessSession; Claude lines carry `message`/`uuid` =>
++// readClaudeSession. Harness lines also carry `message`, so the harness check
++// runs first. Any other shape (empty, unrecognised) => []. Kiro/Codex/opencode
++// wire no producer, so their transcripts (if any) are never read here.
+ export function readTranscript(path: string): UsageRow[] {
++  if (isHarnessSessionTranscript(path)) return readHarnessSession(path);
+   let raw: string;
+   try {
+     raw = readFileSync(path, "utf-8");
+@@ -1692,6 +1841,29 @@ export function foldTranscriptIntoLedger(
+         mode !== "holdback",
+       );
+ 
++      // Coding Harness: subagent and advisor transcripts nest beside the session
++      // file (`<session>/<agent id>.jsonl`), attributed from the parents' task calls.
++      if (isHarnessSessionTranscript(transcriptPath)) {
++        const files = harnessSubagentFiles(transcriptPath);
++        const types = harnessAgentTypes(transcriptPath, files);
++        for (const file of files) {
++          foldFileIntoLedger(
++            ledger,
++            file.sourceKey,
++            file.path,
++            file.agentId,
++            types,
++            stageSlug,
++            sessionKey,
++            workflowKey,
++            mode === "flush-all",
++          );
++        }
++        mkdirSync(sessionsDir(projectDir), { recursive: true });
++        writeFileAtomic(ledgerPath(projectDir), JSON.stringify(ledger, null, 2));
++        return ledger;
++      }
++
+       // Each sibling sub-agent file, with its sidecar agentType map (rebuilt each
+       // fold - sidecars are tiny and the set can grow between folds).
+       const subDir = subagentDir(transcriptPath);

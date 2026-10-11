@@ -1,0 +1,193 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
+Date: Sun, 11 Oct 2026 23:27:07 +0100
+Subject: [PATCH 2/8] feat(core): register the harness distribution
+
+Coding Harness ships its engine in .harness-aidlc (the user's .harness/
+holds harness configuration). Teach runtime discovery, hook path
+resolution, statusline and integrity roots, settings, the doctor and the
+scan/doc exclusions about that directory and the harness distribution name.
+---
+ core/hooks/aidlc-statusline.ts    |  1 +
+ core/hooks/runtime-integrity.ts   |  2 +-
+ core/tools/aidlc-doctor.ts        |  1 +
+ core/tools/aidlc-lib.ts           | 11 +++++++++--
+ core/tools/aidlc-runtime-paths.ts |  3 ++-
+ core/tools/aidlc-settings.ts      |  3 ++-
+ core/tools/aidlc-state.ts         |  2 ++
+ core/tools/aidlc-utility.ts       |  4 +++-
+ core/tools/aidlc.ts               |  1 +
+ 9 files changed, 22 insertions(+), 6 deletions(-)
+
+diff --git a/core/hooks/aidlc-statusline.ts b/core/hooks/aidlc-statusline.ts
+index c583df870081b8f28d2c7bde0ab629f5f764223a..7955e76e1a7c96c892bfe499dc4c9e1a027833ad 100644
+--- a/core/hooks/aidlc-statusline.ts
++++ b/core/hooks/aidlc-statusline.ts
+@@ -18,6 +18,7 @@ const KNOWN_HARNESS_DIRS = [
+   ".codex",
+   ".cursor",
+   ".aidlc",
++  ".harness-aidlc",
+ ] as const;
+ 
+ type IntentRow = {
+diff --git a/core/hooks/runtime-integrity.ts b/core/hooks/runtime-integrity.ts
+index fba9ee487e94933d8825f36c43c2d8eb8b497348..156550b25853368477333f48d68be58788e29fbd 100644
+--- a/core/hooks/runtime-integrity.ts
++++ b/core/hooks/runtime-integrity.ts
+@@ -978,7 +978,7 @@ function isAuthoredDevelopmentPath(path: string, cwd: string): boolean {
+ }
+ 
+ function harnessInstallRoots(cwd: string): string[] {
+-  const conventional = [".claude", ".codex", ".kiro", ".cursor", ".aidlc"]
++  const conventional = [".claude", ".codex", ".kiro", ".cursor", ".aidlc", ".harness-aidlc"]
+     .map((dir) => resolve(cwd, dir));
+   try {
+     const harnessDir = runtimeHarnessDir(cwd);
+diff --git a/core/tools/aidlc-doctor.ts b/core/tools/aidlc-doctor.ts
+index b946b8d5c0d4cb8b7d608ded08f62cd12efeef2f..f53145dff670c690a923311776c796dde1383079 100644
+--- a/core/tools/aidlc-doctor.ts
++++ b/core/tools/aidlc-doctor.ts
+@@ -209,6 +209,7 @@ function humanReport(
+     kiro: "Kiro CLI",
+     "kiro-ide": "Kiro IDE",
+     opencode: "opencode",
++    harness: "Coding Harness",
+   };
+   const frameworkPattern =
+     /^(?:Agent filename|Scope filename|Cycle detection|Orphan stage|Uncompiled stage|Enabled stage compile coverage|Scope validation|Schema validation|Graph references|Keyword overlap|Rule drift|Paired sensor coverage|Stage graph|Scope grid|Sensor |Required sections|Upstream coverage|Traceability|Linter|Type check)/i;
+diff --git a/core/tools/aidlc-lib.ts b/core/tools/aidlc-lib.ts
+index 17c6e4457693624a64a81280eac6c9ad81566e4b..570b3ade847f75b39fe3973eff984f7f31dc1638 100644
+--- a/core/tools/aidlc-lib.ts
++++ b/core/tools/aidlc-lib.ts
+@@ -249,7 +249,7 @@ export const PHASE_NUMBERS: Record<string, Phase> = {
+ // dev-repo CWD rung, where more than one harness dir can coexist and the Claude
+ // tree is canonical (".claude" must win). A real single-harness install never
+ // reaches the probe; it resolves by script path.
+-export const KNOWN_HARNESS_DIRS = [".claude", ".kiro", ".codex", ".aidlc", ".cursor"] as const;
++export const KNOWN_HARNESS_DIRS = [".claude", ".kiro", ".codex", ".aidlc", ".cursor", ".harness-aidlc"] as const;
+ 
+ // True for a plausible harness dir name: a dot-prefixed segment, e.g. ".claude"
+ // / ".kiro" / ".gemini". Guards the script-path derivation so an unexpected
+@@ -333,6 +333,8 @@ const KNOWN_RULES_SUBDIR: Record<string, string> = {
+   // *.ts as custom tools, so the engine cannot live there); no rename needed.
+   ".aidlc": "rules",
+   ".cursor": "rules",
++  // Coding Harness: the engine has its own dir beside the user's .harness/ config.
++  ".harness-aidlc": "rules",
+ };
+ 
+ /** One MIME type's text extractor, as configured in harness.json. */
+@@ -7586,6 +7588,7 @@ function installedHarnessNameForTarget(target: ActiveDirectiveTarget): string |
+     const dir = harnessDir();
+     if (dir === ".aidlc") return "opencode";
+     if (dir === ".kiro") return "kiro";
++    if (dir === ".harness-aidlc") return "harness";
+     return /^\.[a-z0-9][a-z0-9._-]*$/i.test(dir) ? dir.slice(1) : null;
+   }
+ }
+@@ -20732,10 +20735,14 @@ export const HOOK_EXECUTION_RECOVERY_CLAUDE =
+   "1. Run /hooks to check hook approval and policy state. 2. If hooks need approval, approve them and fully restart the CLI; approval does not take effect until a full restart. 3. If /hooks says hooks are restricted by policy, only your Claude Code administrator can lift allowManagedHooksOnly in managed-settings.json. Until then, for an attended session, launch the CLI with AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 and AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1";
+ export const HOOK_EXECUTION_RECOVERY_OTHER =
+   "verify this harness's hook registration or trust configuration, then fully restart the harness before resuming the workflow";
++export const HOOK_EXECUTION_RECOVERY_HARNESS =
++  "check that .harness/extensions/aidlc.ts exists, is committed (harness discovery skips gitignored files) and loads in /extensions, and that `aidlc` is on PATH; then start a fresh harness session from the project root";
+ 
+ /** The doctor's recovery sentence for hooks that stopped firing, per harness. */
+ export function hookExecutionRecoveryText(harnessName: string): string {
+-  return harnessName === "claude" ? HOOK_EXECUTION_RECOVERY_CLAUDE : HOOK_EXECUTION_RECOVERY_OTHER;
++  if (harnessName === "claude") return HOOK_EXECUTION_RECOVERY_CLAUDE;
++  if (harnessName === "harness") return HOOK_EXECUTION_RECOVERY_HARNESS;
++  return HOOK_EXECUTION_RECOVERY_OTHER;
+ }
+ 
+ export interface HookHeartbeatStamp {
+diff --git a/core/tools/aidlc-runtime-paths.ts b/core/tools/aidlc-runtime-paths.ts
+index 4086c659098ecfa539423715357d400585db67c8..dfb7c235842078826b7d8c0ed2e117eb600b14ff 100644
+--- a/core/tools/aidlc-runtime-paths.ts
++++ b/core/tools/aidlc-runtime-paths.ts
+@@ -25,7 +25,7 @@ export interface ProjectHarness {
+   frameworkVersion?: string;
+ }
+ 
+-const HARNESS_PRECEDENCE = [".claude", ".kiro", ".codex", ".cursor", ".aidlc"] as const;
++const HARNESS_PRECEDENCE = [".claude", ".kiro", ".codex", ".cursor", ".aidlc", ".harness-aidlc"] as const;
+ 
+ function markerRecord(path: string): Record<string, unknown> {
+   let value: unknown;
+@@ -257,6 +257,7 @@ export function runtimeHarnessName(
+   if (harnessDir === ".codex") return "codex";
+   if (harnessDir === ".kiro") return "kiro";
+   if (harnessDir === ".cursor") return "cursor";
++  if (harnessDir === ".harness-aidlc") return "harness";
+   return "claude";
+ }
+ 
+diff --git a/core/tools/aidlc-settings.ts b/core/tools/aidlc-settings.ts
+index eadfdd187c45a502ae80d79ad48a30765f8d8cc4..09c70349f576cfd7666d99e461828677790d5485 100644
+--- a/core/tools/aidlc-settings.ts
++++ b/core/tools/aidlc-settings.ts
+@@ -112,6 +112,7 @@ const MODEL_HARNESSES = [
+   "kiro",
+   "kiro-ide",
+   "opencode",
++  "harness",
+ ] as const;
+ const PROFILE_NAME = /^[a-z0-9][a-z0-9-]*$/;
+ 
+@@ -704,7 +705,7 @@ export const AIDLC_SETTINGS_SCHEMA = {
+                 type: "object",
+                 additionalProperties: false,
+                 properties: Object.fromEntries(
+-                  ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]
++                  ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode", "harness"]
+                     .map((name) => [name, { type: "string", minLength: 1 }]),
+                 ),
+               },
+diff --git a/core/tools/aidlc-state.ts b/core/tools/aidlc-state.ts
+index 9d181c5c84f3bc20f6a63306d332751860afd7af..2c69adafd293a69a5dabefb30c9a2117862761de 100644
+--- a/core/tools/aidlc-state.ts
++++ b/core/tools/aidlc-state.ts
+@@ -221,6 +221,8 @@ const HARNESS_DOC_DIRS = new Set([
+   ".opencode",
+   ".aidlc",
+   ".cursor",
++  ".harness",
++  ".harness-aidlc",
+   ".git",
+ ]);
+ 
+diff --git a/core/tools/aidlc-utility.ts b/core/tools/aidlc-utility.ts
+index b00f7cf66a1dbec5ee096cb4ed0e8d36dd7e0191..2d5389e1cef3bcb8d297975c7bae9f06b01bb339 100644
+--- a/core/tools/aidlc-utility.ts
++++ b/core/tools/aidlc-utility.ts
+@@ -3528,7 +3528,7 @@ export async function collectDoctorReport(
+   // 4b. Dual-harness coexistence (D-11): another harness tree installed AND a
+   // workflow active is supported-but-untested — warn (advisory pass with a
+   // visible label), never block.
+-  const otherTrees = [".claude", ".kiro", ".codex", ".aidlc", ".cursor"].filter(
++  const otherTrees = [".claude", ".kiro", ".codex", ".aidlc", ".cursor", ".harness-aidlc"].filter(
+     (h) => h !== harness && existsSync(join(projectDir, h, "tools", "aidlc-lib.ts")),
+   );
+   if (
+@@ -5819,6 +5819,8 @@ const SCAN_EXCLUDE = new Set([
+   ".opencode",
+   ".aidlc",
+   ".cursor",
++  ".harness",
++  ".harness-aidlc",
+   "aidlc-docs",
+   "node_modules",
+   ".git",
+diff --git a/core/tools/aidlc.ts b/core/tools/aidlc.ts
+index fd142751dfda99439f6e921850f88ca9f869f4a9..ae0bf5fa53c3e6c3d697cf855e8379013588d00f 100644
+--- a/core/tools/aidlc.ts
++++ b/core/tools/aidlc.ts
+@@ -1224,6 +1224,7 @@ function resolveHookPath(
+         ".kiro",
+         ".codex",
+         ".cursor",
++        ".harness-aidlc",
+       ].filter((value, index, values): value is string =>
+         typeof value === "string" && value.length > 0 && values.indexOf(value) === index
+       );

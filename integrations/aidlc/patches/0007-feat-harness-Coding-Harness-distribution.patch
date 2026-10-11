@@ -1,0 +1,1557 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
+Date: Sun, 11 Oct 2026 23:47:47 +0100
+Subject: [PATCH 7/8] feat(harness): Coding Harness distribution
+
+harness/harness projects the core into .harness-aidlc and emits the host
+shell: persona task agents (host/agents), the /aidlc prompt, the method
+include list, the adapter extension and the orchestrator skill derived
+from the Claude skill. The bootstrap .harness/extensions/aidlc.ts is a
+whole-file root integration that re-exports the adapter.
+---
+ harness/harness/dot-gitignore                 |  83 ++
+ harness/harness/emit.ts                       | 244 +++++
+ harness/harness/host/adapter.ts               | 855 ++++++++++++++++++
+ harness/harness/host/prompts/aidlc.md         |  14 +
+ harness/harness/manifest.ts                   |  82 ++
+ harness/harness/onboarding.fills.ts           |  42 +
+ .../skills/aidlc/question-rendering.md        | 168 ++++
+ 7 files changed, 1488 insertions(+)
+ create mode 100644 harness/harness/dot-gitignore
+ create mode 100644 harness/harness/emit.ts
+ create mode 100644 harness/harness/host/adapter.ts
+ create mode 100644 harness/harness/host/prompts/aidlc.md
+ create mode 100644 harness/harness/manifest.ts
+ create mode 100644 harness/harness/onboarding.fills.ts
+ create mode 100644 harness/harness/skills/aidlc/question-rendering.md
+
+diff --git a/harness/harness/dot-gitignore b/harness/harness/dot-gitignore
+new file mode 100644
+index 0000000000000000000000000000000000000000..965d3b76e3a21e4315eb2ca71d6542cf51dbf99f
+--- /dev/null
++++ b/harness/harness/dot-gitignore
+@@ -0,0 +1,83 @@
++# Logs
++logs
++*.log
++npm-debug.log*
++yarn-debug.log*
++yarn-error.log*
++pnpm-debug.log*
++lerna-debug.log*
++
++node_modules
++dist
++dist-ssr
++*.local
++
++# Editor directories and files
++.vscode/*
++!.vscode/extensions.json
++.idea
++.DS_Store
++*.suo
++*.ntvs*
++*.njsproj
++*.sln
++*.sw?
++
++# AI-DLC — the committed-vs-ignored split (workspace layout, re-rooted under aidlc/).
++# Rule of thumb (vision §5.1): per-user session CURSORS and machine-local
++# runtime/derived state are ignored; everything that is the shared work —
++# method, registry, state, AUDIT (per-clone shards), artifacts — is committed.
++#
++# Per-user session cursors — ignored (two teammates legitimately point at
++# different spaces/intents at once; committing them would turn per-user
++# navigation into shared state and cause conflicts on intent creation and cursor switches).
++aidlc/active-space
++aidlc/spaces/*/intents/active-intent
++#
++# Machine-local runtime / derived — ignored (regenerated per machine).
++# The clone-id token names this clone's audit shard; it MUST stay machine-local
++# (gitignored) or every clone from a commit would share a shard and git-conflict.
++aidlc/.aidlc-clone-id
++aidlc/.aidlc-unit-scope.json
++aidlc/.aidlc-unit-parked
++aidlc/.aidlc-claim-generations.json
++aidlc/.aidlc-unit-participant
++aidlc/.aidlc-claim-registry.json
++aidlc/.aidlc-unit-releases/
++aidlc/.aidlc-unit-merges/
++# Atomic active-space create staging (normally unlinked immediately).
++aidlc/.aidlc-active-space-*.tmp
++# Per-conversation session→intent map (resume rebind, P8): per-user runtime
++# state keyed by Claude Code session_id, never shared truth.
++aidlc/.aidlc-sessions/
++aidlc/spaces/*/intents/.aidlc-*
++# Framework state at any depth, including the bare space intents root and
++# package-local record trees; keep unrelated application dot folders visible.
++**/aidlc/spaces/*/intents/**/.aidlc-engine/
++**/aidlc/spaces/*/intents/**/.aidlc-sensors/
++# DocumentKB staged-transaction scratch: `onboard` stages a document into
++# `.journal/<txn-id>/` and renames it into place under the audit lock. Per-clone
++# and transient -- a committed journal would be a merge conflict on every
++# concurrent sync, and a crashed run's leftovers would be committed as if they
++# were work. Collected on the next sync; named by txn id, referenced by no index
++# row, so removal is always safe.
++aidlc/spaces/*/knowledge/documentkb/.journal/
++# DocumentKB `linked`-source alias map: alias -> a machine-specific ABSOLUTE
++# root. Committing it would give every clone one developer's directory layout,
++# which is the exact failure the "never an absolute path in committed metadata"
++# rule exists to prevent. The committed side holds only the alias.
++aidlc/spaces/*/knowledge/.sources.local.json
++aidlc/spaces/*/intents/*/runtime-graph.json
++aidlc/spaces/*/intents/*/.aidlc-*
++# Redacted diagnostic reports (/aidlc --doctor --export): regenerated, meant to
++# be shared then deleted — machine-local derived output, never shared truth.
++aidlc/diagnostics/
++#
++# COMMITTED (NOT ignored, listed here for the record — do NOT add ignore rules
++# for these): aidlc/spaces/*/memory/** · aidlc/spaces/*/codekb/** ·
++# aidlc/spaces/*/intents/intents.json · aidlc/spaces/*/intents/*/aidlc-state.md ·
++# aidlc/spaces/*/intents/*/audit/*.md (the audit trail, committed as PER-CLONE
++# SHARDS: each machine appends to audit/<host>-<clone>.md so git never merges
++# concurrent appends — there is intentionally NO .gitattributes merge=union,
++# which was proven to corrupt the multi-line audit blocks) ·
++# aidlc/spaces/*/intents/*/<phase>/<stage>/*.md (artifacts + diary).
+diff --git a/harness/harness/emit.ts b/harness/harness/emit.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..ac68916e21350ec41198238ae9943ed75b90b885
+--- /dev/null
++++ b/harness/harness/emit.ts
+@@ -0,0 +1,244 @@
++// harness/harness/emit.ts — the Coding Harness per-shell emission plugin.
++//
++// The unified packager copies core/ → dist/harness/.harness-aidlc/ and runs graph
++// compile + runner-gen there, then calls this emit() for the harness-native shell:
++//   - .harness-aidlc/host/agents/aidlc-*-agent.md — the 14 personas as harness task
++//     agents: core frontmatter with the `tier:` line projected to the harness-native
++//     `model:` / `thinkingLevel:` keys, `disallowedTools: Task` projected to
++//     `spawns: []`, body token-substituted → .harness-aidlc.
++//   - .harness-aidlc/host/prompts/aidlc.md — the user-invoked /aidlc prompt template.
++//   - .harness-aidlc/host/includes.json — the method files the adapter injects into
++//     the system prompt, derived from the Claude include stub so both hosts load
++//     the same files in the same order.
++//   - .harness-aidlc/host/adapter.ts — the hook adapter extension (authored), with
++//     the shipped entrypoint list and the shared welcome text embedded.
++//   - .harness-aidlc/host/rules/ and host/watchdog/ — stream rules and advisor
++//     guidance the adapter contributes through `resources_discover`.
++//   - .harness-aidlc/skills/aidlc/SKILL.md — the orchestrator skill, derived from
++//     the Claude distribution's skill with the harness tool vocabulary.
++//   - .harness/extensions/aidlc.ts — the bootstrap the harness auto-loads; it
++//     re-exports host/adapter.ts (whole-file root integration).
++
++import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
++import { dirname, join } from "node:path";
++import type { EmitContext } from "../../scripts/manifest-types.ts";
++import {
++  absorbReviewerKnowledge,
++  injectDelegatedKnowledgePreflight,
++} from "../../scripts/agent-knowledge.ts";
++import type { Tier } from "../../core/tools/aidlc-tiers.ts";
++import {
++  modelAgentName,
++  resolveModelPolicy,
++  writeMarkdownAgentSurface,
++} from "../../core/tools/aidlc-model-policy.ts";
++
++const BOOTSTRAP = `// AI-DLC bootstrap for Coding Harness. Managed by AI-DLC as a whole file: change it
++// with \`aidlc config\`, not by hand. The adapter lives in the engine directory so it
++// is versioned and integrity-checked with the rest of the framework.
++export { default } from "../../{{HARNESS_DIR}}/host/adapter.ts";
++`;
++
++// Rewrite a core persona .md into its harness task-agent twin.
++function emitAgentMd(raw: string, srcPath: string, tierCap: EmitContext["tierCap"]): string {
++  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
++  const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
++  if (!m) throw new Error(`${srcPath}: agent .md has no closed frontmatter block.`);
++  const fm = m[1];
++  const tierMatch = fm.match(/^tier:\s*(\S+)\s*$/m);
++  if (!tierMatch) throw new Error(`${srcPath}: agent frontmatter has no tier: line.`);
++  const disallowedMatch = fm.match(/^disallowedTools:\s*(.*?)\s*$/m);
++  if (disallowedMatch && !/^Task$/i.test(disallowedMatch[1])) {
++    throw new Error(`${srcPath}: harness emission cannot project disallowedTools: ${disallowedMatch[1]}.`);
++  }
++  const effective = resolveModelPolicy(null, modelAgentName(srcPath), tierMatch[1] as Tier, "harness", tierCap);
++  return writeMarkdownAgentSurface(raw, effective, {
++    effortKey: "thinkingLevel",
++    // The harness has no per-agent turn cap; the persona's Turn Budget prose carries the guidance.
++    removeKeys: ["disallowedTools", "maxTurns", "thinking", "spawns"],
++    afterProjectionLines: disallowedMatch ? ["spawns: []"] : [],
++  });
++}
++
++// Method references in persona bodies point at the shipped default space.
++function projectActiveMemoryReferences(raw: string, harnessDir: string): string {
++  return raw
++    .replaceAll("aidlc/spaces/<active-space>/memory/", "aidlc/spaces/default/memory/")
++    .replaceAll(`${harnessDir}/rules/aidlc-org.md`, "aidlc/spaces/default/memory/org.md")
++    .replaceAll(`${harnessDir}/rules/aidlc-team.md`, "aidlc/spaces/default/memory/team.md")
++    .replaceAll(`${harnessDir}/rules/aidlc-project.md`, "aidlc/spaces/default/memory/project.md")
++    .replaceAll(`${harnessDir}/rules/`, "aidlc/spaces/default/memory/");
++}
++
++function embedMarker(raw: string, marker: string, value: string, label: string): string {
++  if (!raw.includes(marker)) throw new Error(`harness adapter is missing its ${label} emission marker.`);
++  return raw.replace(marker, () => value);
++}
++
++function shippedEntrypoints(distRoot: string, harnessDir: string): string {
++  const entries = ["hooks", "tools"]
++    .flatMap(dir =>
++      readdirSync(join(distRoot, harnessDir, dir), { withFileTypes: true })
++        .filter(entry => entry.isFile() && entry.name.endsWith(".ts"))
++        .map(entry => `${dir}/${entry.name}`),
++    )
++    .sort();
++  return JSON.stringify(entries, null, 2)
++    .split("\n")
++    .map((line, index) => (index === 0 ? line : `  ${line}`))
++    .join("\n");
++}
++
++function welcomeText(repoRoot: string): string {
++  const settings = JSON.parse(readFileSync(join(repoRoot, "harness", "claude", "settings.json"), "utf-8")) as {
++    companyAnnouncements?: unknown;
++  };
++  const announcement = Array.isArray(settings.companyAnnouncements) ? settings.companyAnnouncements[0] : undefined;
++  if (typeof announcement !== "string" || !announcement.trim()) {
++    throw new Error("harness emission needs the Claude distribution's companyAnnouncements welcome text.");
++  }
++  return announcement;
++}
++
++/** Method include list, from the Claude @-import stub (`@../../aidlc/spaces/default/memory/<file>`). */
++export function includeFiles(stub: string): string[] {
++  const files = [...stub.matchAll(/^@\.\.\/\.\.\/aidlc\/spaces\/default\/memory\/(\S+)\s*$/gm)].map(match => match[1]);
++  if (files.length === 0) throw new Error("Claude rules-aidlc.md stub lists no method files.");
++  return files;
++}
++
++// The harness speaks the same structured-question and delegation contract as
++// Claude Code, through its own tools. Every rule must match the Claude text at
++// least once, so a change upstream fails the build instead of shipping stale prose.
++const SKILL_REWRITES: Array<{ from: RegExp; to: string; label: string }> = [
++  { from: /\.claude\/scopes\//g, to: ".harness-aidlc/scopes/", label: "scopes path" },
++  { from: /`bun \.claude\/tools\//g, to: "`bun .harness-aidlc/tools/", label: "engine tool path" },
++  { from: /^# AI-DLC Orchestrator$/m, to: "# AI-DLC Orchestrator (Coding Harness)", label: "title" },
++  {
++    from: /^The welcome message is displayed via `companyAnnouncements` in `settings\.json` at session start\.$/m,
++    to: "The welcome message is shown by the AI-DLC adapter extension at session start.",
++    label: "welcome",
++  },
++  { from: /Run the engine binary directly via Bash\./g, to: "Run the engine binary directly via the `bash` tool.", label: "bash" },
++  {
++    from: /via `AskUserQuestion` \(this harness's binding/g,
++    to: "via the `ask` tool (this harness's binding",
++    label: "ask binding",
++  },
++  {
++    from: /via `Task\(directive\.lead_agent\)` with the stage body as the prompt/g,
++    to: "by delegating to `directive.lead_agent` with the `task` tool, the stage body as the assignment",
++    label: "task dispatch",
++  },
++  {
++    from: /run the composer via `Task\(aidlc-composer-agent\)` with the message's instructions as the prompt/g,
++    to: "run the composer by delegating to `aidlc-composer-agent` with the `task` tool, the message's instructions as the assignment",
++    label: "composer dispatch",
++  },
++  { from: /`AskUserQuestion`/g, to: "`ask`", label: "ask tool name" },
++  { from: /AskUserQuestion/g, to: "ask", label: "ask tool mention" },
++];
++
++export function deriveSkill(claudeSkill: string): string {
++  let text = claudeSkill;
++  for (const rule of SKILL_REWRITES) {
++    if (!rule.from.test(text)) throw new Error(`harness SKILL.md derivation: rule "${rule.label}" no longer matches the Claude skill.`);
++    rule.from.lastIndex = 0;
++    text = text.replace(rule.from, rule.to);
++  }
++  for (const forbidden of [/\.claude\//, /AskUserQuestion/, /companyAnnouncements/, /\bTask\(/]) {
++    if (forbidden.test(text)) throw new Error(`harness SKILL.md derivation left Claude-only text: ${forbidden}`);
++  }
++  return text;
++}
++
++export default function emit(ctx: EmitContext): void {
++  const { repoRoot, coreRoot, harnessRoot, distRoot, harnessDir, substituteToken, tierCap } = ctx;
++  const HOST = join(distRoot, harnessDir, "host");
++  const BOOTSTRAP_PATH = join(distRoot, ".harness", "extensions", "aidlc.ts");
++  const ACTIVE_MEMORY = join(distRoot, "aidlc", "spaces", "default", "memory");
++  if (!existsSync(ACTIVE_MEMORY)) {
++    throw new Error(`harness emission requires the shipped memory tree at ${ACTIVE_MEMORY}.`);
++  }
++
++  const emissions: Array<{ path: string; content: () => string }> = [];
++
++  // Persona task agents from core/agents/*.md (tier-projected, body → .harness-aidlc).
++  const agentsDir = join(coreRoot, "agents");
++  for (const f of readdirSync(agentsDir).filter(x => x.endsWith(".md")).sort()) {
++    emissions.push({
++      path: join(HOST, "agents", f),
++      content: () => {
++        // Reviewer knowledge absorption on the raw core text, as the packager does for the inline twins.
++        const agentName = f.replace(/\.md$/, "");
++        const raw = injectDelegatedKnowledgePreflight(
++          absorbReviewerKnowledge(readFileSync(join(agentsDir, f), "utf-8"), agentName, coreRoot),
++          agentName,
++          harnessDir,
++        );
++        return projectActiveMemoryReferences(substituteToken(emitAgentMd(raw, join(agentsDir, f), tierCap)), harnessDir);
++      },
++    });
++    // The conductor reads this core-projected copy for inline persona framing.
++    const inlinePath = join(distRoot, harnessDir, "agents", f);
++    emissions.push({
++      path: inlinePath,
++      content: () => projectActiveMemoryReferences(readFileSync(inlinePath, "utf-8"), harnessDir),
++    });
++  }
++
++  emissions.push({
++    path: join(HOST, "prompts", "aidlc.md"),
++    content: () => substituteToken(readFileSync(join(harnessRoot, "host", "prompts", "aidlc.md"), "utf-8")),
++  });
++  emissions.push({
++    path: join(HOST, "includes.json"),
++    content: () =>
++      `${JSON.stringify(
++        {
++          schemaVersion: 1,
++          memory: "aidlc/spaces/default/memory",
++          files: includeFiles(readFileSync(join(repoRoot, "harness", "claude", "rules-aidlc.md"), "utf-8")),
++        },
++        null,
++        2,
++      )}\n`,
++  });
++  emissions.push({
++    path: join(HOST, "adapter.ts"),
++    content: () =>
++      substituteToken(
++        embedMarker(
++          embedMarker(
++            readFileSync(join(harnessRoot, "host", "adapter.ts"), "utf-8"),
++            "/* @aidlc-shipped-entrypoints@ */ []",
++            `/* @aidlc-shipped-entrypoints@ */ ${shippedEntrypoints(distRoot, harnessDir)}`,
++            "shipped-entrypoint",
++          ),
++          '/* @aidlc-welcome@ */ ""',
++          `/* @aidlc-welcome@ */ ${JSON.stringify(welcomeText(repoRoot))}`,
++          "welcome",
++        ),
++      ),
++  });
++  emissions.push({
++    path: join(distRoot, harnessDir, "skills", "aidlc", "SKILL.md"),
++    content: () =>
++      substituteToken(deriveSkill(readFileSync(join(repoRoot, "harness", "claude", "skills", "aidlc", "SKILL.md"), "utf-8"))),
++  });
++  emissions.push({ path: BOOTSTRAP_PATH, content: () => substituteToken(BOOTSTRAP) });
++
++  // Clean-sweep the host shell and the bootstrap dir so a removed file cannot
++  // linger. In --check mode the packager supplies an isolated distRoot.
++  const contents = emissions.map(({ path, content }) => ({ path, text: content() }));
++  rmSync(HOST, { recursive: true, force: true });
++  rmSync(join(distRoot, ".harness"), { recursive: true, force: true });
++  for (const { path, text } of contents) {
++    mkdirSync(dirname(path), { recursive: true });
++    writeFileSync(path, text, "utf-8");
++  }
++  for (const dir of ["rules", "watchdog"]) {
++    const source = join(harnessRoot, "host", dir);
++    if (existsSync(source)) cpSync(source, join(HOST, dir), { recursive: true });
++  }
++}
+diff --git a/harness/harness/host/adapter.ts b/harness/harness/host/adapter.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..226601b1aa386871dbc585973ac30f3d9cd55eaf
+--- /dev/null
++++ b/harness/harness/host/adapter.ts
+@@ -0,0 +1,855 @@
++// harness/harness/host/adapter.ts — the Coding Harness hook adapter (AUTHORED
++// shell file; the aidlc-*.ts hook bodies in <project>/{{HARNESS_DIR}}/hooks/ are
++// PACKAGED core, shared byte-for-byte with every other distribution).
++//
++// Coding Harness loads project extensions from .harness/extensions/; the
++// distribution's bootstrap there re-exports this module. The extension maps the
++// harness event surface onto the core hook bodies, each run through the AI-DLC
++// dispatcher with the Claude Code hook-input JSON the core hooks parse:
++//
++//   harness event                         → core hook (Claude event it mirrors)
++//   ------------------------------------------------------------------------
++//   session_start (main)                   → session-start            (SessionStart)
++//   input (interactive/rpc, main)          → record-human-turn        (UserPromptSubmit)
++//   first before_agent_start in print mode → record-human-turn        (UserPromptSubmit)
++//   tool_call (every tool)                 → fold-usage               (PreToolUse "")
++//   tool_call task                         → deliver-stage-rules + plan-approval-guard (PreToolUse Task)
++//   tool_call file and bash tools          → state-transition-guard, reviewer-scope, review-freeze,
++//                                            plan-approval-guard      (PreToolUse)
++//   tool_result write/edit/ast_edit        → write-audit-log, run-sensors (PostToolUse Write|Edit)
++//   tool_result todo                       → sync-workflow-state      (PostToolUse TaskUpdate)
++//   tool_result ask (main)                 → record-human-turn        (PostToolUse AskUserQuestion)
++//   tool_result bash                       → rebuild-stage-graph      (PostToolUse Bash)
++//   tool_result (every tool)               → fold-usage               (PostToolUse "")
++//   tool_result task                       → log-subagent             (SubagentStop)
++//   session_stop (main)                    → continue-workflow        (Stop)
++//   session_before_compact (main)          → validate-state           (PreCompact)
++//   session_shutdown (main)                → session-end              (SessionEnd)
++//   turn_end / agent_end (main)            → statusline               (statusLine)
++//
++// Beyond Claude parity, sensor verdicts reach the model as additional context
++// (set AIDLC_HARNESS_SENSOR_FEEDBACK=0 to turn that off; audit rows are
++// unchanged either way), and the AI-DLC method tree is injected into the system
++// prompt from host/includes.json (the harness has no project include config).
++
++import { spawn } from "node:child_process";
++import { createHash } from "node:crypto";
++import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
++import { homedir } from "node:os";
++import { dirname, isAbsolute, join, resolve } from "node:path";
++
++export const ENGINE_DIR = "{{HARNESS_DIR}}";
++const PROJECTED_INVOKE = "{{INVOKE}}";
++const TRUSTED_NAMESPACE = "{{TRUSTED_NAMESPACE}}";
++const PROJECTED_TRUSTED_NAMESPACE = TRUSTED_NAMESPACE.startsWith("{{") ? "engine" : TRUSTED_NAMESPACE;
++const UNPROJECTED_ENGINE_DIR = ENGINE_DIR.startsWith("{{") ? ".harness-aidlc" : ENGINE_DIR;
++const DEFAULT_AIDLC_COMMAND = PROJECTED_INVOKE.startsWith("{{")
++  ? ["bun", `${UNPROJECTED_ENGINE_DIR}/tools/aidlc.ts`, PROJECTED_TRUSTED_NAMESPACE]
++  : [...PROJECTED_INVOKE.trim().split(/\s+/), PROJECTED_TRUSTED_NAMESPACE];
++
++// emit.ts replaces the empty array with every packaged {{HARNESS_DIR}}/{tools,hooks}/*.ts path.
++const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
++  /* @aidlc-shipped-entrypoints@ */ [],
++);
++
++// emit.ts replaces the empty string with the shared AI-DLC welcome text.
++const WELCOME_MESSAGE: string = /* @aidlc-welcome@ */ "";
++
++const BLOCKING_HOOK_TIMEOUT_MS = 25_000;
++const QUEUED_HOOK_TIMEOUT_MS = 120_000;
++const SENSOR_FEEDBACK_WAIT_MS = 20_000;
++const SENSOR_FEEDBACK_MAX_CHARS = 6_000;
++const SENSOR_DETAIL_MAX_CHARS = 2_000;
++const SENSOR_DETAIL_MAX_LINES = 30;
++const CONSTITUTION_MAX_CHARS = 60_000;
++const STATUSLINE_DEBOUNCE_MS = 1_000;
++// The ask tool appends this to answers its timeout selected (setting `ask.timeout`).
++const ASK_TIMEOUT_MARKER = "(auto-selected after timeout)";
++const ASK_TIMEOUT_CONTEXT =
++  "AI-DLC: an answer above was auto-selected by the ask timeout, not chosen by the human. " +
++  "Autonomy is never inferred: do not report or record it as the human's answer. " +
++  "Re-present the same question without a recommended option and END THE TURN.";
++
++// ---------------------------------------------------------------------------
++// Structural view of the Coding Harness extension API this adapter uses.
++// ---------------------------------------------------------------------------
++
++export type HarnessAgentIdentity = { kind: "main" | "sub"; id: string; name: string };
++
++export type HarnessContext = {
++  cwd: string;
++  hasUI?: boolean;
++  agent?: HarnessAgentIdentity;
++  model?: { id?: string; name?: string; provider?: string };
++  sessionManager?: { getSessionFile?: () => string | undefined; getSessionId?: () => string };
++  ui?: {
++    setStatus?: (key: string, text: string | undefined) => void;
++    notify?: (message: string, type?: "info" | "warning" | "error") => void;
++  };
++  getContextUsage?: () => { percent?: number | null; tokens?: number | null; contextWindow?: number } | undefined;
++};
++
++type Handler = (event: Record<string, unknown>, ctx: HarnessContext) => unknown;
++
++export type HarnessExtensionApi = {
++  on: (event: string, handler: Handler) => void;
++  sendMessage?: (
++    message: { customType: string; content: string; display?: boolean },
++    options?: { deliverAs?: "steer" | "followUp" | "nextTurn" | "aside" },
++  ) => void;
++};
++
++export type CoreResult = { stdout: string; stderr: string; code: number };
++
++export type AdapterOptions = {
++  /** Test seam: the AI-DLC dispatcher command. Production uses the projected invocation. */
++  aidlcCommand?: readonly string[];
++  /** Test seam: shipped entrypoints accepted by the bash boundary. */
++  aidlcEntrypoints?: ReadonlySet<string>;
++  /** Test seam: replaces the subprocess runner. */
++  runCore?: (hook: string, input: Record<string, unknown>, cwd: string, timeoutMs: number) => Promise<CoreResult>;
++};
++
++// ---------------------------------------------------------------------------
++// Core invocation
++// ---------------------------------------------------------------------------
++
++function debugLog(cwd: string, entry: Record<string, unknown>): void {
++  if (process.env.AIDLC_HARNESS_DEBUG !== "1") return;
++  try {
++    const stateHome = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state");
++    const dir = join(stateHome, "aidlc-harness");
++    mkdirSync(dir, { recursive: true });
++    const name = createHash("sha1").update(cwd).digest("hex").slice(0, 12);
++    appendFileSync(join(dir, `${name}.log`), `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`);
++  } catch {
++    // Debug logging never affects the session.
++  }
++}
++
++function spawnCoreHook(
++  command: readonly string[],
++  hook: string,
++  input: Record<string, unknown>,
++  cwd: string,
++  timeoutMs: number,
++): Promise<CoreResult> {
++  return new Promise(resolvePromise => {
++    const [bin, ...prefix] = command;
++    if (!bin) return resolvePromise({ stdout: "", stderr: "", code: 0 });
++    const started = Date.now();
++    try {
++      const child = spawn(bin, [...prefix, "hook", hook, "--project-dir", cwd], {
++        cwd,
++        stdio: ["pipe", "pipe", "pipe"],
++        env: {
++          ...process.env,
++          AIDLC_PROJECT_DIR: cwd,
++          CLAUDE_PROJECT_DIR: cwd,
++          AIDLC_HARNESS_DIR: UNPROJECTED_ENGINE_DIR,
++          AIDLC_HARNESS_NAME: "harness",
++          ...(hook === "run-sensors" && process.env.AIDLC_HARNESS_SENSOR_FEEDBACK !== "0"
++            ? { AIDLC_SENSOR_FEEDBACK: "1" }
++            : {}),
++        },
++      });
++      let out = "";
++      let err = "";
++      let settled = false;
++      const finish = (result: CoreResult) => {
++        if (settled) return;
++        settled = true;
++        clearTimeout(timer);
++        debugLog(cwd, { hook, code: result.code, ms: Date.now() - started });
++        resolvePromise(result);
++      };
++      const timer = setTimeout(() => {
++        child.kill("SIGKILL");
++        finish({ stdout: "", stderr: "", code: 0 }); // fail open on timeout
++      }, timeoutMs);
++      child.stdout.on("data", (d: Buffer) => {
++        out += d.toString();
++      });
++      child.stderr.on("data", (d: Buffer) => {
++        err += d.toString();
++      });
++      child.on("error", () => finish({ stdout: "", stderr: "", code: 0 })); // fail open
++      child.on("close", (code: number | null) => {
++        // Only exit 2 is a decision; any other failure fails open like the host CLIs do.
++        const normalized = code === 0 || code === 2 ? code : 0;
++        finish({ stdout: normalized === 0 && code !== 0 ? "" : out, stderr: err, code: normalized });
++      });
++      child.stdin.on("error", () => {});
++      child.stdin.write(JSON.stringify(input));
++      child.stdin.end();
++    } catch {
++      resolvePromise({ stdout: "", stderr: "", code: 0 }); // fail open
++    }
++  });
++}
++
++function parseJson(text: string): Record<string, unknown> | null {
++  const trimmed = text.trim();
++  if (!trimmed) return null;
++  try {
++    const parsed = JSON.parse(trimmed) as unknown;
++    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
++  } catch {
++    return null;
++  }
++}
++
++// ---------------------------------------------------------------------------
++// Session identity: Claude hooks always carry the MAIN session id and transcript,
++// subagent tool calls add agent_type. Harness subagent transcripts live at
++// <main session file without .jsonl>/<TaskName>.jsonl.
++// ---------------------------------------------------------------------------
++
++export function mainSessionFile(ctx: HarnessContext): string | undefined {
++  const file = ctx.sessionManager?.getSessionFile?.();
++  if (!file || ctx.agent?.kind !== "sub") return file;
++  const parentFile = `${dirname(file)}.jsonl`;
++  return existsSync(parentFile) ? parentFile : file;
++}
++
++export function mainSessionId(ctx: HarnessContext): string {
++  const file = mainSessionFile(ctx);
++  const fromFile = file ? /_([^_/]+)\.jsonl$/.exec(file)?.[1] : undefined;
++  return fromFile ?? ctx.sessionManager?.getSessionId?.() ?? "harness-session";
++}
++
++function agentFields(ctx: HarnessContext): Record<string, unknown> {
++  return ctx.agent?.kind === "sub" ? { agent_type: ctx.agent.name, agent_id: ctx.agent.id } : {};
++}
++
++// ---------------------------------------------------------------------------
++// Tool mapping: harness tool → Claude tool name + file targets
++// ---------------------------------------------------------------------------
++
++export type ClaudeCall = { toolName: string; toolInput: Record<string, unknown> };
++
++/** Strip harness read selectors (`:50-80`, `:raw`, `?q=…`) and drop internal URLs. */
++export function realPath(value: unknown): string | null {
++  if (typeof value !== "string" || value.trim() === "") return null;
++  const raw = value.trim();
++  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return null;
++  const withoutQuery = raw.replace(/\?.*$/, "");
++  return withoutQuery.replace(/(?::(?:raw|img|conflicts|-?\d[\d,+\-]*|\d+[hms][\dhms]*))+$/, "");
++}
++
++function pathList(input: Record<string, unknown>): string[] {
++  const values: unknown[] = [];
++  if (Array.isArray(input.paths)) values.push(...input.paths);
++  if (input.path !== undefined) values.push(input.path);
++  if (input.file !== undefined) values.push(input.file);
++  const paths: string[] = [];
++  for (const value of values) {
++    for (const part of typeof value === "string" ? value.split(";") : []) {
++      const path = realPath(part);
++      if (path && !paths.includes(path)) paths.push(path);
++    }
++  }
++  return paths;
++}
++
++const CLAUDE_NAME: Record<string, string> = {
++  read: "Read",
++  grep: "Grep",
++  glob: "Glob",
++  ast_grep: "Grep",
++  lsp: "Read",
++  write: "Write",
++  edit: "Edit",
++  ast_edit: "Edit",
++  bash: "Bash",
++};
++
++export function claudeCalls(toolName: string, input: Record<string, unknown>): ClaudeCall[] {
++  const claude = CLAUDE_NAME[toolName];
++  if (!claude) return [];
++  if (claude === "Bash") return [{ toolName: "Bash", toolInput: { command: String(input.command ?? "") } }];
++  return pathList(input).map(path => ({
++    toolName: claude,
++    toolInput: claude === "Grep" || claude === "Glob" ? { path, pattern: String(input.pattern ?? "") } : { file_path: path },
++  }));
++}
++
++const WRITE_TOOLS = new Set(["write", "edit", "ast_edit"]);
++const GUARDED_TOOLS = new Set(["read", "grep", "glob", "ast_grep", "lsp", "write", "edit", "ast_edit", "bash"]);
++
++// ---------------------------------------------------------------------------
++// Task dispatch mapping: harness task items ↔ Claude Task input
++// ---------------------------------------------------------------------------
++
++export type TaskItem = { agent: string; task: string; name?: string };
++
++export function taskItems(input: Record<string, unknown>): TaskItem[] {
++  const fromItem = (item: Record<string, unknown>): TaskItem => ({
++    agent: typeof item.agent === "string" && item.agent ? item.agent : "task",
++    task: typeof item.task === "string" ? item.task : "",
++    ...(typeof item.name === "string" ? { name: item.name } : {}),
++  });
++  if (Array.isArray(input.tasks)) {
++    return input.tasks.filter(item => item && typeof item === "object").map(item => fromItem(item as Record<string, unknown>));
++  }
++  return [fromItem(input)];
++}
++
++/** Rebuild the task input with rewritten assignments, preserving every other field. */
++export function withTaskAssignments(input: Record<string, unknown>, assignments: string[]): Record<string, unknown> {
++  if (Array.isArray(input.tasks)) {
++    return {
++      ...input,
++      tasks: input.tasks.map((item, index) =>
++        item && typeof item === "object" ? { ...(item as Record<string, unknown>), task: assignments[index] } : item,
++      ),
++    };
++  }
++  return { ...input, task: assignments[0] };
++}
++
++// ---------------------------------------------------------------------------
++// Bash boundary: one direct invocation of a shipped framework entrypoint only.
++// ---------------------------------------------------------------------------
++
++function directShellWords(command: string): string[] | null {
++  const words: string[] = [];
++  let word = "";
++  let wordStarted = false;
++  let quote: "'" | '"' | null = null;
++  for (let i = 0; i < command.length; i++) {
++    const ch = command[i];
++    if (quote === "'") {
++      if (ch === "'") quote = null;
++      else word += ch;
++      continue;
++    }
++    if (quote === '"') {
++      if (ch === '"') {
++        quote = null;
++        continue;
++      }
++      if (ch === "$" || ch === "`" || ch === "\\") return null;
++      word += ch;
++      continue;
++    }
++    if (ch === "'" || ch === '"') {
++      quote = ch;
++      wordStarted = true;
++      continue;
++    }
++    if (ch === " " || ch === "\t") {
++      if (wordStarted) {
++        words.push(word);
++        word = "";
++        wordStarted = false;
++      }
++      continue;
++    }
++    if (/[;&|<>()`$\\\n\r*?[\]{}~!#]/.test(ch)) return null;
++    word += ch;
++    wordStarted = true;
++  }
++  if (quote) return null;
++  if (wordStarted) words.push(word);
++  return words;
++}
++
++const ENGINE_DIR_PATTERN = UNPROJECTED_ENGINE_DIR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
++const AIDLC_BUN_PREFIX = new RegExp(`^bun[ \\t]+${ENGINE_DIR_PATTERN}/(?:tools|hooks)/`);
++const AIDLC_ENTRYPOINT = new RegExp(`^${ENGINE_DIR_PATTERN}/(tools|hooks)/([A-Za-z0-9][A-Za-z0-9._-]*\\.ts)$`);
++
++export function bashBoundaryViolation(
++  command: string,
++  allowedEntrypoints: ReadonlySet<string> = shippedAidlcEntrypoints,
++): string | null {
++  const trimmed = command.trim();
++  if (/^aidlc(?:[ \t]|$)/.test(trimmed)) {
++    const words = directShellWords(trimmed);
++    if (words?.[0] === "aidlc") return null;
++    return (
++      "AIDLC bash permission allows one direct invocation of a framework tool only. " +
++      "Do not use chaining, redirection, expansion, or command substitution."
++    );
++  }
++  if (!AIDLC_BUN_PREFIX.test(trimmed)) return null;
++  const words = directShellWords(trimmed);
++  const target = words?.[1]?.match(AIDLC_ENTRYPOINT);
++  if (words?.[0] === "bun" && target && (allowedEntrypoints.size === 0 || allowedEntrypoints.has(`${target[1]}/${target[2]}`))) {
++    return null;
++  }
++  return (
++    "AIDLC bash permission allows one direct invocation of a shipped tool or hook only. " +
++    `Use an unchanged ${UNPROJECTED_ENGINE_DIR} entrypoint without chaining, redirection, expansion, or command substitution.`
++  );
++}
++
++// ---------------------------------------------------------------------------
++// Constitution: the AI-DLC method tree, injected into the system prompt.
++// ---------------------------------------------------------------------------
++
++type IncludesFile = { schemaVersion: number; memory: string; files: string[] };
++
++export function readIncludes(cwd: string): IncludesFile | null {
++  const parsed = parseJson(readText(join(cwd, UNPROJECTED_ENGINE_DIR, "host", "includes.json")) ?? "");
++  if (!parsed || typeof parsed.memory !== "string" || !Array.isArray(parsed.files)) return null;
++  return {
++    schemaVersion: Number(parsed.schemaVersion ?? 1),
++    memory: parsed.memory,
++    files: parsed.files.filter((file): file is string => typeof file === "string"),
++  };
++}
++
++function readText(path: string): string | null {
++  try {
++    return readFileSync(path, "utf-8");
++  } catch {
++    return null;
++  }
++}
++
++function mtimeKey(paths: string[]): string {
++  return paths
++    .map(path => {
++      try {
++        return `${path}:${statSync(path).mtimeMs}`;
++      } catch {
++        return `${path}:missing`;
++      }
++    })
++    .join("|");
++}
++
++export function buildConstitution(cwd: string): string | null {
++  const includes = readIncludes(cwd);
++  const sources: Array<{ label: string; path: string }> = [
++    { label: `${UNPROJECTED_ENGINE_DIR}/onboarding.md`, path: join(cwd, UNPROJECTED_ENGINE_DIR, "onboarding.md") },
++  ];
++  if (includes) {
++    for (const file of includes.files) {
++      sources.push({ label: `${includes.memory}/${file}`, path: join(cwd, includes.memory, file) });
++    }
++  }
++  const sections: string[] = [];
++  const pointers: string[] = [];
++  let size = 0;
++  for (const { label, path } of sources) {
++    const content = readText(path);
++    if (content === null || content.trim() === "") continue;
++    const section = `## ${label}\n\n${content.trim()}\n`;
++    if (size + section.length > CONSTITUTION_MAX_CHARS) {
++      pointers.push(`- \`${label}\`: read it with the read tool when you need it.`);
++      continue;
++    }
++    size += section.length;
++    sections.push(section);
++  }
++  if (sections.length === 0 && pointers.length === 0) return null;
++  return [
++    "# AI-DLC method (imported)",
++    "",
++    "The project's AI-DLC method files follow. They are the standing practices for every stage.",
++    "",
++    ...sections,
++    ...(pointers.length > 0 ? ["## Not inlined (size budget)", "", ...pointers, ""] : []),
++  ].join("\n");
++}
++
++// ---------------------------------------------------------------------------
++// Sensor feedback (model-visible; audit rows are untouched).
++// ---------------------------------------------------------------------------
++
++export type FireVerdict = {
++  fire_id?: string;
++  sensor_id?: string;
++  stage?: string;
++  output_path?: string;
++  result?: string;
++  detail_path?: string;
++  note?: string;
++};
++
++export function parseSensorFeedback(stdout: string): FireVerdict[] {
++  for (const line of stdout.split("\n").reverse()) {
++    const parsed = parseJson(line);
++    if (parsed && Array.isArray(parsed.sensor_feedback)) {
++      return parsed.sensor_feedback.filter(item => item && typeof item === "object") as FireVerdict[];
++    }
++  }
++  return [];
++}
++
++function failed(verdict: FireVerdict): boolean {
++  return verdict.result !== undefined && !/^(pass|passed|ok|skipped|skip)$/i.test(verdict.result);
++}
++
++export function formatSensorFeedback(verdicts: FireVerdict[], cwd: string): string | null {
++  if (verdicts.length === 0) return null;
++  const failures = verdicts.filter(failed);
++  const passes = verdicts.filter(verdict => !failed(verdict));
++  const first = verdicts[0];
++  const header = `AI-DLC sensors on ${first.output_path ?? "the written file"}${first.stage ? ` (stage ${first.stage})` : ""}:`;
++  const lines = [header];
++  for (const verdict of failures) {
++    const detailPath = verdict.detail_path
++      ? isAbsolute(verdict.detail_path)
++        ? verdict.detail_path
++        : join(cwd, verdict.detail_path)
++      : null;
++    const detail = detailPath ? readText(detailPath) : null;
++    const excerpt = detail
++      ? detail.split("\n").slice(0, SENSOR_DETAIL_MAX_LINES).join("\n").slice(0, SENSOR_DETAIL_MAX_CHARS).trim()
++      : (verdict.note ?? "").trim();
++    lines.push(`- ${verdict.sensor_id ?? "sensor"}: ${String(verdict.result ?? "failed").toUpperCase()}${excerpt ? `\n${excerpt}` : ""}`);
++  }
++  if (passes.length > 3) {
++    lines.push(`- ${passes.length} sensors passed: ${passes.map(verdict => verdict.sensor_id ?? "sensor").join(", ")}`);
++  } else {
++    for (const verdict of passes) lines.push(`- ${verdict.sensor_id ?? "sensor"}: passed`);
++  }
++  const text = lines.join("\n");
++  return text.length > SENSOR_FEEDBACK_MAX_CHARS ? `${text.slice(0, SENSOR_FEEDBACK_MAX_CHARS)}\n[truncated]` : text;
++}
++
++// ---------------------------------------------------------------------------
++// Message text helpers
++// ---------------------------------------------------------------------------
++
++function messageText(message: unknown): string {
++  if (!message || typeof message !== "object") return "";
++  const content = (message as { content?: unknown }).content;
++  if (typeof content === "string") return content;
++  if (!Array.isArray(content)) return "";
++  return content
++    .filter(block => block && typeof block === "object" && (block as { type?: string }).type === "text")
++    .map(block => String((block as { text?: unknown }).text ?? ""))
++    .join("\n");
++}
++
++function resultText(event: Record<string, unknown>): string {
++  return Array.isArray(event.content)
++    ? event.content
++        .filter(block => block && typeof block === "object" && (block as { type?: string }).type === "text")
++        .map(block => String((block as { text?: unknown }).text ?? ""))
++        .join("\n")
++    : "";
++}
++
++// ---------------------------------------------------------------------------
++// The extension
++// ---------------------------------------------------------------------------
++
++export default function aidlcHarnessAdapter(pi: HarnessExtensionApi, options: AdapterOptions = {}): void {
++  const aidlcCommand = options.aidlcCommand ?? DEFAULT_AIDLC_COMMAND;
++  const entrypoints = options.aidlcEntrypoints ?? shippedAidlcEntrypoints;
++  const runCore = (hook: string, input: Record<string, unknown>, cwd: string, timeoutMs = BLOCKING_HOOK_TIMEOUT_MS) =>
++    options.runCore
++      ? options.runCore(hook, input, cwd, timeoutMs)
++      : spawnCoreHook(aidlcCommand, hook, input, cwd, timeoutMs);
++
++  // Serial post-tool queue: preserves Claude's ordering (audit before sensors)
++  // and keeps slow hooks off the tool path. Flushed at turn and session boundaries.
++  let queue: Promise<unknown> = Promise.resolve();
++  const enqueue = <T>(work: () => Promise<T>): Promise<T> => {
++    const next = queue.then(work, work);
++    queue = next.catch(() => undefined);
++    return next;
++  };
++  const flush = () => queue;
++
++  let pendingSessionContext: string | null = null;
++  let sawInput = false;
++  let recordedPrintPrompt = false;
++  let constitutionCache: { key: string; text: string | null } | null = null;
++  let statusTimer: ReturnType<typeof setTimeout> | null = null;
++
++  const isMain = (ctx: HarnessContext) => ctx.agent?.kind !== "sub";
++
++  const base = (ctx: HarnessContext, hookEventName: string): Record<string, unknown> => ({
++    hook_event_name: hookEventName,
++    session_id: mainSessionId(ctx),
++    transcript_path: mainSessionFile(ctx) ?? "",
++    cwd: ctx.cwd,
++    ...agentFields(ctx),
++  });
++
++  const constitution = (cwd: string): string | null => {
++    const includes = readIncludes(cwd);
++    const files = [
++      join(cwd, UNPROJECTED_ENGINE_DIR, "host", "includes.json"),
++      join(cwd, UNPROJECTED_ENGINE_DIR, "onboarding.md"),
++      ...(includes ? includes.files.map(file => join(cwd, includes.memory, file)) : []),
++    ];
++    const key = mtimeKey(files);
++    if (constitutionCache?.key !== key) constitutionCache = { key, text: buildConstitution(cwd) };
++    return constitutionCache.text;
++  };
++
++  const refreshStatus = (ctx: HarnessContext) => {
++    if (!isMain(ctx) || !ctx.ui?.setStatus) return;
++    if (statusTimer) clearTimeout(statusTimer);
++    statusTimer = setTimeout(async () => {
++      statusTimer = null;
++      const usage = ctx.getContextUsage?.();
++      const result = await runCore(
++        "statusline",
++        {
++          session_id: mainSessionId(ctx),
++          transcript_path: mainSessionFile(ctx) ?? "",
++          workspace: { project_dir: ctx.cwd, current_dir: ctx.cwd },
++          model: { id: ctx.model?.id ?? "", display_name: ctx.model?.name ?? ctx.model?.id ?? "" },
++          context_window: { used_percentage: usage?.percent ?? null },
++        },
++        ctx.cwd,
++      );
++      const text = result.stdout.trim().split("\n")[0]?.trim();
++      ctx.ui?.setStatus?.("aidlc", text || undefined);
++    }, STATUSLINE_DEBOUNCE_MS);
++  };
++
++  pi.on("resources_discover", () => ({
++    skillPaths: [`${UNPROJECTED_ENGINE_DIR}/skills`],
++    promptPaths: [`${UNPROJECTED_ENGINE_DIR}/host/prompts`],
++    agentPaths: [`${UNPROJECTED_ENGINE_DIR}/host/agents`],
++    rulePaths: [`${UNPROJECTED_ENGINE_DIR}/host/rules`],
++    watchdogPaths: [`${UNPROJECTED_ENGINE_DIR}/host/watchdog/WATCHDOG.md`],
++  }));
++
++  pi.on("session_start", async (event, ctx) => {
++    if (!isMain(ctx)) return;
++    if (WELCOME_MESSAGE && ctx.hasUI && ctx.ui?.notify) ctx.ui.notify(WELCOME_MESSAGE, "info");
++    const result = await runCore("session-start", { ...base(ctx, "SessionStart"), source: event.reason === "resume" ? "resume" : "startup" }, ctx.cwd);
++    const parsed = parseJson(result.stdout);
++    const hookOutput = parsed?.hookSpecificOutput as { additionalContext?: unknown } | undefined;
++    const context = hookOutput?.additionalContext ?? parsed?.additionalContext;
++    pendingSessionContext = typeof context === "string" && context.trim() ? context : null;
++    refreshStatus(ctx);
++  });
++
++  pi.on("input", async (event, ctx) => {
++    if (!isMain(ctx)) return;
++    if (event.source !== "interactive" && event.source !== "rpc") return;
++    sawInput = true;
++    await runCore("record-human-turn", { ...base(ctx, "UserPromptSubmit"), prompt: String(event.text ?? "") }, ctx.cwd);
++  });
++
++  pi.on("before_agent_start", async (event, ctx) => {
++    if (isMain(ctx) && !sawInput && !recordedPrintPrompt) {
++      // Print mode delivers the prompt without an input event; Claude `-p` still fires UserPromptSubmit once.
++      recordedPrintPrompt = true;
++      await runCore("record-human-turn", { ...base(ctx, "UserPromptSubmit"), prompt: String(event.prompt ?? "") }, ctx.cwd);
++    }
++    const additions: string[] = [];
++    const method = constitution(ctx.cwd);
++    if (method) additions.push(method);
++    if (isMain(ctx) && pendingSessionContext) {
++      additions.push(pendingSessionContext);
++      pendingSessionContext = null;
++    }
++    if (additions.length === 0) return;
++    const systemPrompt = Array.isArray(event.systemPrompt) ? (event.systemPrompt as string[]) : [];
++    return { systemPrompt: [...systemPrompt, ...additions] };
++  });
++
++  pi.on("tool_call", async (event, ctx) => {
++    const toolName = String(event.toolName ?? "");
++    const input = (event.input ?? {}) as Record<string, unknown>;
++    const cwd = ctx.cwd;
++
++    await runCore("fold-usage", { ...base(ctx, "PreToolUse"), tool_name: CLAUDE_NAME[toolName] ?? toolName, tool_input: input }, cwd);
++
++    if (toolName === "task") {
++      await flush();
++      const items = taskItems(input);
++      const assignments: string[] = [];
++      let rewritten = false;
++      for (const item of items) {
++        const taskInput = { subagent_type: item.agent, prompt: item.task, description: item.name ?? item.agent };
++        const dispatch = await runCore("deliver-stage-rules", { ...base(ctx, "PreToolUse"), tool_name: "Task", tool_input: taskInput }, cwd);
++        if (dispatch.code === 2) {
++          return { block: true, reason: dispatch.stderr.trim() || "required active-stage rules could not be loaded for subagent dispatch" };
++        }
++        const updated = (parseJson(dispatch.stdout)?.hookSpecificOutput as { updatedInput?: { prompt?: unknown } } | undefined)
++          ?.updatedInput;
++        const prompt = typeof updated?.prompt === "string" ? updated.prompt : item.task;
++        if (prompt !== item.task) rewritten = true;
++        assignments.push(prompt);
++        const guard = await runCore(
++          "plan-approval-guard",
++          {
++            ...base(ctx, "PreToolUse"),
++            tool_name: "Task",
++            tool_input: { subagent_type: item.agent, prompt: [prompt, item.name ?? ""].filter(Boolean).join("\n") },
++          },
++          cwd,
++        );
++        if (guard.code === 2) {
++          return { block: true, reason: guard.stderr.trim() || "code-generation requires an approved plan before dispatching the developer agent" };
++        }
++      }
++      return rewritten ? { input: withTaskAssignments(input, assignments) } : undefined;
++    }
++
++    if (!GUARDED_TOOLS.has(toolName)) return;
++
++    if (toolName === "bash") {
++      const violation = bashBoundaryViolation(String(input.command ?? ""), entrypoints);
++      if (violation) return { block: true, reason: violation };
++    }
++
++    const calls = claudeCalls(toolName, input);
++    for (const call of calls) {
++      const payload = { ...base(ctx, "PreToolUse"), tool_name: call.toolName, tool_input: call.toolInput };
++      if (call.toolName === "Bash") {
++        const guard = await runCore("state-transition-guard", payload, cwd);
++        if (guard.code === 2) {
++          return {
++            block: true,
++            reason: guard.stderr.trim() || "stage status is changed by the workflow tools, not by hand: use the engine report command instead",
++          };
++        }
++      }
++      if (ctx.agent?.kind === "sub") {
++        const scope = await runCore("reviewer-scope", payload, cwd);
++        if (scope.code === 2) return { block: true, reason: scope.stderr.trim() || "reviewer read-scope refused this tool call" };
++      }
++      if (call.toolName === "Bash" || call.toolName === "Write" || call.toolName === "Edit") {
++        const freeze = await runCore("review-freeze", payload, cwd);
++        if (freeze.code === 2) {
++          return { block: true, reason: freeze.stderr.trim() || "review-freeze: this write would invalidate a fresh READY review receipt" };
++        }
++        const plan = await runCore("plan-approval-guard", payload, cwd);
++        if (plan.code === 2) {
++          return { block: true, reason: plan.stderr.trim() || "code-generation requires an approved plan before workspace mutation" };
++        }
++      }
++    }
++    return undefined;
++  });
++
++  pi.on("tool_result", async (event, ctx) => {
++    const toolName = String(event.toolName ?? "");
++    const input = (event.input ?? {}) as Record<string, unknown>;
++    const cwd = ctx.cwd;
++    const ok = event.isError !== true;
++    let additionalContext: string | undefined;
++
++    if (ok && WRITE_TOOLS.has(toolName)) {
++      const paths = pathList(input).map(path => (isAbsolute(path) ? path : resolve(cwd, path)));
++      const verdicts: FireVerdict[] = [];
++      for (const filePath of paths) {
++        const payload = { ...base(ctx, "PostToolUse"), tool_name: "Write", tool_input: { file_path: filePath } };
++        void enqueue(() => runCore("write-audit-log", payload, cwd, QUEUED_HOOK_TIMEOUT_MS));
++        const sensors = enqueue(() => runCore("run-sensors", payload, cwd, QUEUED_HOOK_TIMEOUT_MS));
++        const settled = await Promise.race([
++          sensors.then(result => ({ result })),
++          new Promise<null>(done => setTimeout(() => done(null), SENSOR_FEEDBACK_WAIT_MS)),
++        ]);
++        if (settled) {
++          verdicts.push(...parseSensorFeedback(settled.result.stdout));
++        } else {
++          void sensors.then(result => {
++            const late = formatSensorFeedback(parseSensorFeedback(result.stdout), cwd);
++            if (late) pi.sendMessage?.({ customType: "aidlc-sensor-feedback", content: late, display: false }, { deliverAs: "nextTurn" });
++          });
++        }
++      }
++      if (process.env.AIDLC_HARNESS_SENSOR_FEEDBACK !== "0") {
++        additionalContext = formatSensorFeedback(verdicts, cwd) ?? undefined;
++      }
++    } else if (ok && toolName === "bash") {
++      const payload = {
++        ...base(ctx, "PostToolUse"),
++        tool_name: "Bash",
++        tool_input: { command: String(input.command ?? "") },
++        tool_response: resultText(event),
++      };
++      void enqueue(() => runCore("rebuild-stage-graph", payload, cwd, QUEUED_HOOK_TIMEOUT_MS));
++    } else if (ok && toolName === "todo") {
++      const active = activeTodo(input, event.details);
++      if (active) {
++        const payload = { ...base(ctx, "PostToolUse"), tool_name: "TaskUpdate", tool_input: { status: "in_progress", activeForm: active } };
++        void enqueue(() => runCore("sync-workflow-state", payload, cwd, QUEUED_HOOK_TIMEOUT_MS));
++      }
++    } else if (ok && toolName === "ask" && isMain(ctx)) {
++      if (resultText(event).includes(ASK_TIMEOUT_MARKER)) {
++        // An answer the ask timeout picked is not a human decision: no presence, and the gate stays open.
++        additionalContext = ASK_TIMEOUT_CONTEXT;
++      } else {
++        await runCore("record-human-turn", { ...base(ctx, "PostToolUse"), tool_name: "AskUserQuestion" }, cwd);
++      }
++    } else if (toolName === "task") {
++      for (const item of taskItems(input)) {
++        const payload = { ...base(ctx, "SubagentStop"), agent_type: item.agent, agent_id: item.name ?? String(event.toolCallId ?? "") };
++        void enqueue(() => runCore("log-subagent", payload, cwd, QUEUED_HOOK_TIMEOUT_MS));
++      }
++    }
++
++    void enqueue(() =>
++      runCore("fold-usage", { ...base(ctx, "PostToolUse"), tool_name: CLAUDE_NAME[toolName] ?? toolName, tool_input: input }, cwd, QUEUED_HOOK_TIMEOUT_MS),
++    );
++    return additionalContext ? { additionalContext } : undefined;
++  });
++
++  pi.on("session_stop", async (event, ctx) => {
++    if (!isMain(ctx)) return;
++    await flush();
++    await runCore("fold-usage", { ...base(ctx, "Stop") }, ctx.cwd);
++    const result = await runCore(
++      "continue-workflow",
++      {
++        ...base(ctx, "Stop"),
++        stop_hook_active: event.stop_hook_active === true,
++        transcript_path: typeof event.session_file === "string" ? event.session_file : (mainSessionFile(ctx) ?? ""),
++        last_assistant_message: messageText(event.last_assistant_message),
++      },
++      ctx.cwd,
++    );
++    refreshStatus(ctx);
++    const parsed = parseJson(result.stdout);
++    if (parsed?.decision === "block" && typeof parsed.reason === "string" && parsed.reason.trim()) {
++      return { decision: "block", reason: parsed.reason };
++    }
++    return undefined;
++  });
++
++  pi.on("session_before_compact", async (_event, ctx) => {
++    if (!isMain(ctx)) return;
++    await flush();
++    await runCore("validate-state", { ...base(ctx, "PreCompact") }, ctx.cwd);
++    return undefined;
++  });
++
++  pi.on("session_shutdown", async (event, ctx) => {
++    if (!isMain(ctx)) return;
++    await flush();
++    await runCore("session-end", { ...base(ctx, "SessionEnd"), reason: String(event.reason ?? "other") }, ctx.cwd);
++  });
++
++  pi.on("turn_end", (_event, ctx) => refreshStatus(ctx));
++  pi.on("agent_end", (_event, ctx) => refreshStatus(ctx));
++}
++
++/** The in-progress todo's content, from the tool input (ops) or the resulting list in details. */
++export function activeTodo(input: Record<string, unknown>, details: unknown): string | null {
++  const fromList = (list: unknown): string | null => {
++    if (!Array.isArray(list)) return null;
++    for (const entry of list) {
++      if (!entry || typeof entry !== "object") continue;
++      const record = entry as Record<string, unknown>;
++      if (record.status === "in_progress" && typeof record.content === "string") return record.content;
++      const nested = fromList(record.items ?? record.tasks);
++      if (nested) return nested;
++    }
++    return null;
++  };
++  const detailRecord = details && typeof details === "object" ? (details as Record<string, unknown>) : {};
++  return (
++    fromList(detailRecord.phases) ??
++    fromList(detailRecord.tasks) ??
++    fromList(detailRecord.todos) ??
++    fromList(input.list) ??
++    fromList(input.todos) ??
++    null
++  );
++}
+diff --git a/harness/harness/host/prompts/aidlc.md b/harness/harness/host/prompts/aidlc.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..a0816edb51c24693e2cb83ed1883c7b51b6d8a16
+--- /dev/null
++++ b/harness/harness/host/prompts/aidlc.md
+@@ -0,0 +1,14 @@
++---
++description: >
++  AI-DLC workflow orchestrator. Start, resume, or manage an AI-driven
++  development lifecycle. Utilities: --status, --doctor, --stage, --phase,
++  --scope, --depth, --test-strategy, --version, --help, plus the intent and
++  space verbs. Or describe what you want to build and the scope will be
++  auto-detected.
++---
++Invoke the `aidlc` skill now and follow it exactly. It defines the AI-DLC
++forwarding loop: you run `{{INVOKE}} engine orchestrate next`
++with the arguments below passed through verbatim, act on the one directive it
++returns, report the outcome, and repeat until the engine says done.
++
++$ARGUMENTS
+diff --git a/harness/harness/manifest.ts b/harness/harness/manifest.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..d54745b402ab5b9173c2f3ee6e7ce74e8e456a91
+--- /dev/null
++++ b/harness/harness/manifest.ts
+@@ -0,0 +1,82 @@
++// harness/harness/manifest.ts — the Coding Harness distribution row.
++//
++// Projects the harness-neutral core/ tree into dist/harness/.harness-aidlc/ and
++// defers every harness-native surface to emit.ts. Verified live against Coding
++// Harness 1.1.0.
++//
++// Coding Harness specifics vs Claude:
++//   - token → .harness-aidlc. The engine needs a directory of its own: `.harness/`
++//     is the user's harness configuration, and `.aidlc/` is AI-DLC's workspace
++//     state. Nothing in .harness-aidlc/ is scanned by the harness on its own.
++//   - The only file AI-DLC places under `.harness/` is the bootstrap
++//     `.harness/extensions/aidlc.ts` (whole-file root integration, written by
++//     emit.ts). The harness auto-loads project extensions from there; the
++//     bootstrap re-exports host/adapter.ts, which maps harness events onto the
++//     core hooks and contributes the distribution's resources through
++//     `resources_discover`: skills (.harness-aidlc/skills), the /aidlc prompt
++//     (host/prompts), the 14 persona agents (host/agents), stream rules
++//     (host/rules) and advisor guidance (host/watchdog).
++//   - The method tree reaches ambient context through the adapter, which injects
++//     the files listed in host/includes.json into the system prompt; a space
++//     switch re-points that file (aidlc-includes.ts).
++//   - The harness reads the project-root AGENTS.md as a context file.
++
++import type { HarnessManifest } from "../../scripts/manifest-types.ts";
++import onboardingFills from "./onboarding.fills.ts";
++import emit from "./emit.ts";
++
++const manifest: HarnessManifest = {
++  name: "harness",
++  productName: "Coding Harness",
++  configNextStep: "run `harness` in this project, then `/aidlc --doctor`",
++  harnessDir: ".harness-aidlc",
++  orchestratorSkillPath: ".harness-aidlc/skills/aidlc/SKILL.md",
++  tierFlavor: "harness",
++  rootIntegrations: [
++    { path: ".gitignore", policy: "managed-block", marker: "gitignore", shared: "union" },
++    { path: "AGENTS.md", policy: "managed-block", marker: "agents", shared: "identical" },
++    { path: ".harness/extensions/aidlc.ts", policy: "whole-file" },
++  ],
++
++  // Same core projection as opencode. The persona .md files ARE core (the
++  // conductor adopts them inline from .harness-aidlc/agents/); the harness-native
++  // agent definitions in host/agents/ are emitted.
++  coreDirs: [
++    { src: "tools", dst: "tools" },
++    { src: "aidlc-common", dst: "aidlc-common" },
++    { src: "knowledge", dst: "knowledge" },
++    { src: "sensors", dst: "sensors" },
++    { src: "scopes", dst: "scopes" },
++    { src: "agents", dst: "agents" },
++    { src: "hooks", dst: "hooks" },
++    { src: "skills/aidlc-session-cost", dst: "skills/aidlc-session-cost" },
++    { src: "skills/aidlc-replay", dst: "skills/aidlc-replay" },
++    { src: "skills/aidlc-outcomes-pack", dst: "skills/aidlc-outcomes-pack" },
++    { src: "skills/aidlc-knowledge", dst: "skills/aidlc-knowledge" },
++  ],
++
++  // The orchestrator SKILL.md is derived from the Claude distribution's by emit.ts
++  // (same text, harness tool vocabulary), so it follows Claude's skill on every change.
++  harnessFiles: [
++    { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
++    { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
++  ],
++
++  // Neutral root guidance is shared; the adapter injects the native setup from onboarding.md.
++  onboarding: { dst: "AGENTS.md", projectRoot: true, harnessDst: "onboarding.md", fills: onboardingFills },
++
++  // .harness-aidlc/ is AI-DLC's own dir; core's rules/ name has nothing to collide with.
++  rulesRename: null,
++
++  emit,
++
++  // Host plugin projection: plugins compose into the engine directory and their
++  // agents into host/agents, which the adapter contributes to task discovery.
++  plugin: {
++    manifestDir: ".harness-aidlc-plugin",
++    kind: "store",
++    installRoots: [".harness"],
++  },
++};
++
++export default manifest;
+diff --git a/harness/harness/onboarding.fills.ts b/harness/harness/onboarding.fills.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..7d4ef2ebf265130fb8ee8d01967d0839fd485586
+--- /dev/null
++++ b/harness/harness/onboarding.fills.ts
+@@ -0,0 +1,42 @@
++// harness/harness/onboarding.fills.ts — Coding Harness onboarding-doc fills.
++// The packager fills core/templates/onboarding-harness.md into
++// dist/harness/.harness-aidlc/onboarding.md, which the adapter injects into the
++// system prompt. The root AGENTS.md stays neutral, identical to the other sharing harnesses.
++
++import type { OnboardingFills } from "../../scripts/onboarding.ts";
++
++const fills: OnboardingFills = {
++  invoke: "/aidlc",
++  slots: {
++    title_block: `# AI-DLC on Coding Harness
++
++This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development, running on **Coding Harness**. The engine ships in \`.harness-aidlc/\` and a one-line bootstrap in \`.harness/extensions/aidlc.ts\` loads it (no setup command); describe what you want to build and it sets up the workflow for you. Run \`/aidlc\` followed by a scope or project description to begin. Run \`/aidlc --doctor\` to validate your setup, \`/aidlc --version\` to print the framework version, \`/aidlc --stage <slug>\` to jump to a specific stage, \`/aidlc --phase <name>\` to jump to a phase, \`/aidlc --depth <level>\` to override depth, \`/aidlc --test-strategy <level>\` to override test volume, \`/aidlc --review <class>\` to cap stage reviews (adversarial, advisory, none). Run \`/aidlc compose "<task>"\` to get a plan tailored to one task.`,
++
++    prereq_bullets: `- **Coding Harness ≥ 1.1.0**: the adapter relies on the \`resources_discover\` extension seam (skills, prompts, agents, rules and advisor guidance contributed from \`.harness-aidlc/\`). Check with \`harness --version\`.
++- **aidlc on PATH**: hooks run through the installed \`aidlc\` dispatcher (\`aidlc --version\`). Set \`AIDLC_BIN\` to use another binary.
++- **Model access**: Coding Harness owns provider credentials and model selection. Persona agents carry \`model\` and \`thinkingLevel\` frontmatter that \`aidlc config models\` maintains; the harness resolves them against your authenticated providers.
++- **Project root**: start \`harness\` from the project root so the bootstrap in \`.harness/extensions/\` loads. Keep \`.harness/extensions/aidlc.ts\` and \`.harness-aidlc/\` committed; harness discovery skips gitignored paths.`,
++
++    prereq_bullets_tail: "",
++
++    agents_note: `On Coding Harness each expert role is a native task agent (\`.harness-aidlc/host/agents/aidlc-<role>-agent.md\`, contributed to task discovery by the adapter); the \`/aidlc\` session takes on those roles itself for most stages and hands work off via the \`task\` tool for the delegated stages.`,
++
++    structure_extra: "",
++
++    sections_before_resumption: `## What's different on this harness
++
++This is the same AI-DLC core that ships to every harness: the same ordered steps, the same approval gates, and the same written record of what was decided, rendered onto Coding Harness. On Coding Harness:
++
++- Approval gates and questions render through the **\`ask\` tool** (structured options; the UI adds "Other").
++- Hooks ride the **AI-DLC adapter extension** (\`.harness-aidlc/host/adapter.ts\`, loaded by \`.harness/extensions/aidlc.ts\`): stage-rule delivery, plan-approval, review-freeze, reviewer read-scope and state-transition guards run before tools; audit and sensors run after writes and edits; the forwarding loop (Stop) blocks and continues natively; session start, session end and pre-compaction validation fire like on Claude Code.
++- **Sensor results reach the model**: after a write, failing sensor findings are added to the tool result so the agent can fix them in the same turn. Set \`AIDLC_HARNESS_SENSOR_FEEDBACK=0\` to turn this off; the audit trail is identical either way.
++- The AI-DLC method (\`aidlc/spaces/<space>/memory/*.md\`) reaches the system prompt through the adapter, from \`.harness-aidlc/host/includes.json\`; \`/aidlc space <name>\` re-points that file.
++- The **status line** shows the AI-DLC position (\`aidlc\` segment); use \`/aidlc --status\` for detail.
++- A workflow's \`aidlc/\` workspace tree is harness-neutral: a project can carry the Claude Code and Coding Harness distributions side by side.
++`,
++
++    sections_after_resumption: "",
++  },
++};
++
++export default fills;
+diff --git a/harness/harness/skills/aidlc/question-rendering.md b/harness/harness/skills/aidlc/question-rendering.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..d8b7a4c41804b41897fd69d6e9c9219aeba245e9
+--- /dev/null
++++ b/harness/harness/skills/aidlc/question-rendering.md
+@@ -0,0 +1,168 @@
++# Question Rendering — Coding Harness annex
++
++This file defines how THIS harness renders the structured questions that
++`aidlc-common/protocols/stage-protocol.md` § "Structured questions" requires.
++The protocol and stage files are harness-neutral: they say *present a
++structured question* and carry a fenced ` ```question ` spec block. This annex
++is the one place that binds that contract to a concrete mechanism.
++
++## Never echo the spec (non-negotiable)
++
++A ` ```question ` fenced block is **INPUT to the `ask` tool, never output to
++render**. The orchestrator MUST translate every ` ```question ` spec into an
++actual `ask` tool call, and MUST NEVER echo, print, paste, or "quote back" the
++fenced block, or any of its field lines (`prompt:`, `header:`, `multiSelect:`,
++`options:`, `label:`, `description:`), into the chat transcript. The user must
++never see the raw fence; they see only the native `ask` dialog.
++
++Echoing the fence as literal text is a **protocol violation**, not a stylistic
++choice. It:
++
++- produces a non-interactive wall of text the user cannot select from;
++- loses the built-in "Other" escape hatch that `ask` provides;
++- is inconsistent with every correct rendering elsewhere in the same session.
++
++If you find yourself about to write a triple-backtick `question` block into your
++reply, STOP: that content belongs inside an `ask` tool call, not in the message
++body.
++
++This applies to **every** structured-question site, including but not limited to:
++
++- approval gates (every stage completion);
++- the questions interaction-mode choice (Guide me / I'll edit the file / Chat);
++- the ladder prompt (autonomy mode after the walking skeleton);
++- halt-and-ask on Bolt failure (Retry / Skip / Abort);
++- consolidated-summary confirmation before artifact generation;
++- the §13 learnings gate (keep / heading / promote-to-team).
++
++(Literal ` ```question ` fences legitimately remain in framework documentation
++like THIS file and the stage-protocol because they are authoring specs, not chat
++output. In the stage-protocol those specs are normative prompt templates: when
++the surrounding instruction requires a question, their content MUST be rendered
++through this annex. This annex's mapping examples are illustrative. The
++prohibition is about echoing raw fences in live orchestration turns.)
++
++## Mechanism
++
++On Coding Harness, every structured question renders via the **`ask` tool**:
++the fenced ` ```question ` spec is the input, the tool call is the output,
++never the other way around. Map the spec fields 1:1:
++
++| Spec field | `ask` field |
++|------------|-------------|
++| (none) | `questions[0].id`: a short kebab-case id, such as `approval` |
++| `prompt` | `questions[0].question` |
++| `header` | `questions[0].header` |
++| `multiSelect` | `questions[0].multi` |
++| `options[].label` | `questions[0].options[].label` |
++| `options[].description` | `questions[0].options[].description` |
++
++Example — this spec:
++
++```question
++prompt: "[Stage Name] complete. How would you like to proceed?"
++header: Approval
++multiSelect: false
++options:
++  - label: Approve
++    description: Continue to [next stage]
++  - label: Request Changes
++    description: Provide revision feedback
++```
++
++renders as:
++
++```
++ask({
++  questions: [{
++    id: "approval",
++    question: "[Stage Name] complete. How would you like to proceed?",
++    header: "Approval",
++    multi: false,
++    options: [
++      { label: "Approve", description: "Continue to [next stage]" },
++      { label: "Request Changes", description: "Provide revision feedback" }
++    ]
++  }]
++})
++```
++
++## Never mark a recommended option on a human decision
++
++`ask` accepts `recommended: <index>`, and a user-configured `ask.timeout` then
++auto-selects that option, or the first option when none is marked, after the
++timeout. **Never set `recommended` on an approval gate, Plan Approval, the
++consolidated-summary checkpoint, or any question whose answer the stage
++protocol records as a human decision.** If a tool result shows
++`(auto-selected after timeout)`, the human did not answer: do not record or
++report it, re-present the same question, and END THE TURN. The AI-DLC adapter
++adds the same reminder to that tool result.
++
++## Mandatory consolidated-summary checkpoint
++
++This checkpoint applies only when `directive.ceremony.summary_confirmation === "on"`. When it is `"off"`, generate directly from the answers: no summary-confirmation prompt, confirmation entry, or receipt. Required stage questions and other human decisions, including Plan Approval and the stage approval gate, are unchanged.
++
++After guided or chat file-backed Q&A (and whenever a stage definition requires
++it explicitly, such as Requirements Analysis), the stage protocol requires a
++separate confirmation before any stage artifact is generated. Append or update
++`## Consolidated Summary Confirmation` in the questions file with the summary,
++the prompt, both options without A/B file-letter prefixes, and a blank
++`[Answer]:` tag, then render the two semantic options through `ask`:
++
++```
++ask({
++  questions: [{
++    id: "confirm",
++    question: "Does this all look correct before I generate the artifact?",
++    header: "Confirm",
++    multi: false,
++    options: [
++      {
++        label: "Looks correct",
++        description: "Generate the artifact from these answers"
++      },
++      {
++        label: "Request changes",
++        description: "Revise one or more answers before generation"
++      }
++    ]
++  }]
++})
++```
++
++This is a mandatory human checkpoint, not the stage approval gate. Before
++rendering it, run the checkpoint-specific `aidlc-log.ts decision` command from
++`SKILL.md`, including the exact `--questions-file` and any `--unit` / `--single`
++identity. END THE TURN after presenting it and wait for the user's response.
++Then persist `[Answer]: Looks correct` or `[Answer]: Request changes` exactly
++and run the matching checkpoint-specific `aidlc-log.ts answer` command. Strip
++any source letter, punctuation, and option description before writing:
++`[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`, `[Answer]: A`, and
++a self-selected answer are invalid. On Request changes, ask **"What should change?"**
++and END THE TURN again; do not update any answer until that feedback
++arrives. Then record the feedback, update the affected answers, reset this tag
++to blank, and present the consolidated summary again. Do not generate the
++artifact until the file contains the human's explicit `[Answer]: Looks correct`
++and the receipt command succeeds. Never merge this checkpoint with the later
++reviewer, learnings, or approval steps.
++
++## Harness-specific behaviors
++
++- **Approval gate `[next stage]`**: on an approval question, render the
++  `Continue to [next stage]` placeholder from the run-stage directive's
++  `next_stage` field verbatim (e.g. `Continue to NFR Requirements`); render
++  `Complete workflow` when `next_stage` is null. Never guess the next stage.
++- **Batching limits**: keep to max 4 questions per `ask` call and max 4 options
++  per question, with **at least 2 options per question**, so every harness
++  renders the same choices. For 5+ options, split across multiple calls
++  (options A-D, then E+); the questions file retains the full option set as the
++  authoritative record. Never send a one-option call.
++- **"Other" escape**: the `ask` dialog always adds "Other (type your own)" — do
++  NOT add an explicit Other option to the spec's options list for interactive
++  batches. (Questions *files* still end every question with
++  `X. Other (please specify)` per protocol §3 — the file format is
++  harness-neutral.)
++- **Answer capture**: the user's selection returns as the exact option label
++  (prefixed by the question id); record the label verbatim (protocol: never
++  summarize User Input). A typed "Other" answer returns as the user's text.
++- **Long prompts**: the question body wraps to the terminal width.

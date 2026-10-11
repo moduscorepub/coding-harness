@@ -1,0 +1,133 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
+Date: Sun, 11 Oct 2026 23:34:44 +0100
+Subject: [PATCH 4/8] feat(core): init, config and doctor for harness
+
+`aidlc init --harness harness` and model-policy commands accept the
+harness distribution; first-run guidance names Coding Harness. Config
+diagnostics validate harness.json for it and treat the bootstrap and adapter
+as the hook-wiring trust files. The doctor checks the bootstrap, adapter,
+/aidlc prompt, persona task agents and method include, warns when the
+bootstrap is gitignored (the harness skips ignored extensions), probes the
+full hook roster, and reads native command trust from the adapter.
+---
+ core/tools/aidlc-config-diagnostics.ts | 10 ++++++-
+ core/tools/aidlc-init.ts               |  6 +++-
+ core/tools/aidlc-utility.ts            | 38 +++++++++++++++++++++++++-
+ 3 files changed, 51 insertions(+), 3 deletions(-)
+
+diff --git a/core/tools/aidlc-config-diagnostics.ts b/core/tools/aidlc-config-diagnostics.ts
+index 4a15063b7047aad60250d5b2732e54b836ce74eb..397ff810504ab7edabfbc6a0f2e70cae41b20976 100644
+--- a/core/tools/aidlc-config-diagnostics.ts
++++ b/core/tools/aidlc-config-diagnostics.ts
+@@ -490,7 +490,8 @@ export function readConfigDiagnosticRecords(harnessRoot: string): ConfigDiagnost
+     distribution !== "cursor" &&
+     distribution !== "kiro" &&
+     distribution !== "kiro-ide" &&
+-    distribution !== "opencode"
++    distribution !== "opencode" &&
++    distribution !== "harness"
+   ) {
+     throw new Error(`${path}: distribution must name a supported harness`);
+   }
+@@ -2340,6 +2341,13 @@ export function trustFilesForHarness(
+   }
+   if (harness === "copilot") files.push(join(projectDir, ".github", "hooks", "aidlc.json"));
+   if (harness === "opencode") files.push(join(projectDir, "opencode.json"));
++  if (harness === "harness") {
++    // The bootstrap the harness auto-loads and the adapter it re-exports carry the hook wiring.
++    files.push(
++      join(projectDir, ".harness", "extensions", "aidlc.ts"),
++      join(projectDir, harnessDir, "host", "adapter.ts"),
++    );
++  }
+   return [...new Set(files)];
+ }
+ 
+diff --git a/core/tools/aidlc-init.ts b/core/tools/aidlc-init.ts
+index a70a6364c7b9235b53149b8d4fa11c6598e42f17..21dc6dd9618c2c4d3f9a4b8984e7ea7fad75ca19 100644
+--- a/core/tools/aidlc-init.ts
++++ b/core/tools/aidlc-init.ts
+@@ -538,7 +538,8 @@ function modelHarness(value: string): ModelHarness {
+     value === "cursor" ||
+     value === "kiro" ||
+     value === "kiro-ide" ||
+-    value === "opencode"
++    value === "opencode" ||
++    value === "harness"
+   ) {
+     return value;
+   }
+@@ -5199,6 +5200,9 @@ function firstRunNextCommands(distribution: string): [string, string] {
+   if (distribution === "copilot") {
+     return ["copilot                        open Copilot CLI in this repo", '/aidlc "what you want built"  describe your first intent'];
+   }
++  if (distribution === "harness") {
++    return ["harness                        open Coding Harness in this repo", '/aidlc "what you want built"  describe your first intent'];
++  }
+   return ["claude                         open Claude Code in this repo", '/aidlc "what you want built"  describe your first intent'];
+ }
+ 
+diff --git a/core/tools/aidlc-utility.ts b/core/tools/aidlc-utility.ts
+index 2d5389e1cef3bcb8d297975c7bae9f06b01bb339..4946719d9df08af7ccb0940028dd892ecbb4d01a 100644
+--- a/core/tools/aidlc-utility.ts
++++ b/core/tools/aidlc-utility.ts
+@@ -2945,6 +2945,14 @@ export async function collectDoctorReport(
+         nativeHooks = existsSync(
+           join(projectDir, ".opencode", "plugin", "aidlc-opencode-adapter.ts"),
+         );
++      } else if (currentHarnessName === "harness") {
++        // Coding Harness: the adapter extension runs the dispatcher itself, so its
++        // projected invocation is the hook wiring. The harness has no project
++        // command allowlist; tool approval follows the user's harness settings.
++        const adapter = join(harnessRoot, "host", "adapter.ts");
++        nativeHooks = existsSync(adapter) &&
++          readFileSync(adapter, "utf-8").includes(`const PROJECTED_INVOKE = "aidlc";`);
++        nativePermission = nativeHooks;
+       }
+       const nativeTrustReady = legacy.length === 0 && nativeHooks && nativePermission;
+       results.push({
+@@ -3321,7 +3329,7 @@ export async function collectDoctorReport(
+     ];
+     if (harness === ".kiro") tsHooks.push("aidlc-kiro-adapter");
+     if (harness === ".codex") tsHooks.push("aidlc-codex-adapter");
+-    if (isCopilot) {
++    if (isCopilot || harness === ".harness-aidlc") {
+       tsHooks.push(
+         "aidlc-state-transition-guard",
+         "aidlc-reviewer-scope",
+@@ -3516,6 +3524,34 @@ export async function collectDoctorReport(
+       label: ".opencode/command/aidlc.md present (/aidlc entry point)",
+       fix: projectedFileRepair("opencode", ".opencode/command/aidlc.md"),
+     });
++  } else if (harness === ".harness-aidlc") {
++    // Coding Harness: the harness auto-loads .harness/extensions/aidlc.ts, which
++    // re-exports the adapter; the adapter contributes the /aidlc prompt, the
++    // persona task agents and the method include through resources_discover.
++    for (const [file, what] of [
++      [".harness/extensions/aidlc.ts", "bootstrap the harness auto-loads"],
++      [".harness-aidlc/host/adapter.ts", "hook wiring"],
++      [".harness-aidlc/host/prompts/aidlc.md", "/aidlc entry point"],
++      [".harness-aidlc/host/agents/aidlc-developer-agent.md", "persona task agents"],
++      [".harness-aidlc/host/includes.json", "method include list"],
++    ] as const) {
++      results.push({
++        pass: existsSync(join(projectDir, file)),
++        label: `${file} present (${what})`,
++        fix: projectedFileRepair("harness", file),
++      });
++    }
++    // Harness extension discovery skips gitignored files: an ignored bootstrap
++    // silently disables every hook.
++    const ignored = spawnSync("git", ["check-ignore", "-q", ".harness/extensions/aidlc.ts"], {
++      cwd: projectDir,
++      stdio: "ignore",
++    }).status === 0;
++    results.push({
++      pass: !ignored,
++      label: ".harness/extensions/aidlc.ts is not gitignored (the harness skips ignored extensions)",
++      fix: "remove the .gitignore rule that matches .harness/extensions/aidlc.ts",
++    });
+   } else {
+     const settingsPath = join(projectDir, harness, "settings.json");
+     results.push({

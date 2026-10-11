@@ -23,7 +23,7 @@ git -C "$UPSTREAM" format-patch --quiet --no-signature --zero-commit --full-inde
 {
 	echo "# Patch series"
 	echo
-	echo "Base: \`awslabs/aidlc-workflows\` tag \`$BASE_TAG\` (\`$(git -C "$UPSTREAM" rev-parse --short "$BASE_TAG")\`)."
+	echo "Base: \`awslabs/aidlc-workflows\` tag \`$BASE_TAG\` (commit \`$(git -C "$UPSTREAM" rev-parse --short "$BASE_TAG^{commit}")\`)."
 	echo "Apply in order with \`git am -3 patches/*.patch\`. See [../GRAFTING.md](../GRAFTING.md)."
 	echo
 	echo "| Patch | Subject | Files |"

@@ -1,0 +1,242 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
+Date: Sun, 11 Oct 2026 23:32:49 +0100
+Subject: [PATCH 3/8] feat(core): tiers, model policy and model access for
+ harness agents
+
+Coding Harness task agents express model and effort as `model:` and
+`thinkingLevel:` frontmatter. Add the harness tier-projection column
+(judgment and templated inherit, balanced pins medium like the other
+markdown surfaces), the model-policy writer and drift reader for
+.harness-aidlc/host/agents, the harness honesty row (every effort is
+native), the tierFlavor, and harness-owned model access with a
+`harness` >= 1.1.0 CLI probe.
+---
+ core/tools/aidlc-config-diagnostics.ts | 14 +++++++--
+ core/tools/aidlc-model-policy.ts       | 40 +++++++++++++++++++++++---
+ core/tools/aidlc-tiers.ts              | 10 +++++++
+ scripts/manifest-types.ts              |  2 +-
+ scripts/package.ts                     |  2 +-
+ 5 files changed, 59 insertions(+), 9 deletions(-)
+
+diff --git a/core/tools/aidlc-config-diagnostics.ts b/core/tools/aidlc-config-diagnostics.ts
+index af61c42ef6998fc9f44497abc44ae112c73dc565..4a15063b7047aad60250d5b2732e54b836ce74eb 100644
+--- a/core/tools/aidlc-config-diagnostics.ts
++++ b/core/tools/aidlc-config-diagnostics.ts
+@@ -45,13 +45,15 @@ export type RuntimeRecord = {
+ // answers use `current`, `amazon-bedrock`, or `other`.
+ export type ProviderKind = "current" | "amazon-bedrock" | "builtin" | "other";
+ 
+-// Kiro CLI and Kiro IDE provide their own model access. AI-DLC has no provider
+-// decision to ask, write, or check for them, even when a legacy answer exists.
+-export type BedrockOrientedHarness = Exclude<ModelHarness, "kiro" | "kiro-ide">;
++// Kiro CLI, Kiro IDE and Coding Harness provide their own model access. AI-DLC
++// has no provider decision to ask, write, or check for them, even when a legacy
++// answer exists.
++export type BedrockOrientedHarness = Exclude<ModelHarness, "kiro" | "kiro-ide" | "harness">;
+ 
+ const HARNESS_OWNED_MODEL_ACCESS: ReadonlySet<ModelHarness> = new Set<ModelHarness>([
+   "kiro",
+   "kiro-ide",
++  "harness",
+ ]);
+ 
+ export function harnessOwnsModelAccess(
+@@ -840,6 +842,12 @@ const HARNESS_CLI: Record<
+     required: true,
+     install: "Install opencode and ensure `opencode --version` works.",
+   },
++  harness: {
++    command: "harness",
++    required: true,
++    minimumVersion: "1.1.0",
++    install: "Install or upgrade Coding Harness to 1.1.0 or later and ensure `harness --version` works.",
++  },
+ };
+ 
+ function versionTuple(value: string): [number, number, number] | null {
+diff --git a/core/tools/aidlc-model-policy.ts b/core/tools/aidlc-model-policy.ts
+index f442682994c752a0d8d2155c198db668353cb595..41847ece43375501feabb2a32a9125b1f8fc5e67 100644
+--- a/core/tools/aidlc-model-policy.ts
++++ b/core/tools/aidlc-model-policy.ts
+@@ -46,7 +46,8 @@ export type ModelHarness =
+   | "cursor"
+   | "kiro"
+   | "kiro-ide"
+-  | "opencode";
++  | "opencode"
++  | "harness";
+ export type ModelPolicyLayer =
+   | "agent-exception"
+   | "group-dial"
+@@ -160,6 +161,13 @@ export const HARNESS_HONESTY = Object.freeze({
+     message:
+       "GitHub Copilot cannot pin one portable agent model or effort across CLI and IDE; agents inherit the session.",
+   }),
++  harness: Object.freeze({
++    model: true,
++    effort: true,
++    groupEffort: true,
++    message:
++      "Coding Harness can express model and thinkingLevel policy on task-agent frontmatter; every effort level is native.",
++  }),
+ });
+ 
+ type HarnessHonesty = (typeof HARNESS_HONESTY)[ModelHarness];
+@@ -354,6 +362,7 @@ function tierHarness(harness: ModelHarness): TierHarness {
+ function projectedEffort(value: ReturnType<typeof projectTier>): ModelEffort | undefined {
+   if ("effort" in value && value.effort) return value.effort;
+   if ("variant" in value && value.variant) return value.variant;
++  if ("thinkingLevel" in value && value.thinkingLevel) return value.thinkingLevel;
+   return undefined;
+ }
+ 
+@@ -453,8 +462,10 @@ export function serializeAgentTiers(tiers: AgentTiers): string {
+   return `${JSON.stringify(Object.fromEntries(Object.entries(tiers).sort()), null, 2)}\n`;
+ }
+ 
++export type MarkdownEffortKey = "effort" | "variant" | "thinkingLevel";
++
+ type MarkdownProjectionOptions = {
+-  effortKey?: "effort" | "variant";
++  effortKey?: MarkdownEffortKey;
+   insertBeforeKeys?: readonly string[];
+   removeKeys?: readonly string[];
+   afterProjectionLines?: readonly string[];
+@@ -462,7 +473,7 @@ type MarkdownProjectionOptions = {
+ 
+ function effectiveProjectionLines(
+   effective: Pick<EffectiveModelPolicy, "model" | "effort">,
+-  effortKey: "effort" | "variant",
++  effortKey: MarkdownEffortKey,
+ ): string[] {
+   return [
+     ...(effective.model !== undefined ? [`model: ${effective.model}`] : []),
+@@ -483,6 +494,7 @@ export function writeMarkdownAgentSurface(
+     "model",
+     "effort",
+     "variant",
++    "thinkingLevel",
+     ...(options.removeKeys ?? []),
+   ]);
+   const source = match[1].split(/\r?\n/);
+@@ -627,6 +639,18 @@ export function applyModelPolicyToProjection(
+         }),
+       );
+     }
++  } else if (harness === "harness") {
++    for (const item of effective) {
++      const path = harnessAgentSurfacePath(harnessRoot, item.agent);
++      if (!existsSync(path)) throw new Error(`${path}: missing agent surface`);
++      writeFileSync(
++        path,
++        writeMarkdownAgentSurface(readFileSync(path, "utf-8"), item, {
++          effortKey: "thinkingLevel",
++          insertBeforeKeys: ["spawns"],
++        }),
++      );
++    }
+   } else if (harness === "kiro") {
+     const modelEfforts: Array<{ model: string; effort: KiroEffort }> = [];
+     for (const item of effective) {
+@@ -647,9 +671,14 @@ export function applyModelPolicyToProjection(
+   return effective;
+ }
+ 
++/** The Coding Harness task-agent surface for one persona (emitted under host/agents/). */
++function harnessAgentSurfacePath(harnessRoot: string, agent: string): string {
++  return join(harnessRoot, "host", "agents", `${modelAgentStem(agent)}.md`);
++}
++
+ function markdownSurfaceValues(
+   content: string,
+-  effortKey: "effort" | "variant",
++  effortKey: MarkdownEffortKey,
+ ): { model?: string; effort?: ModelEffort } {
+   const fm = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "";
+   const model = /^model:\s*(\S+)\s*$/m.exec(fm)?.[1];
+@@ -732,6 +761,9 @@ export function modelPolicySurfaceDrift(
+     } else if (harness === "opencode") {
+       path = join(projectDir, ".opencode", "agents", `${modelAgentStem(name)}.md`);
+       if (existsSync(path)) actual = markdownSurfaceValues(readFileSync(path, "utf-8"), "variant");
++    } else if (harness === "harness") {
++      path = harnessAgentSurfacePath(harnessRoot, name);
++      if (existsSync(path)) actual = markdownSurfaceValues(readFileSync(path, "utf-8"), "thinkingLevel");
+     } else if (harness === "kiro") {
+       path = join(harnessRoot, "agents", `${modelAgentStem(name)}.json`);
+       if (existsSync(path)) {
+diff --git a/core/tools/aidlc-tiers.ts b/core/tools/aidlc-tiers.ts
+index 758c63bd4fe8e24f06afa6f7c81076f2dfcdaf9b..dc66733cfcb8cd49c34a542f3e73a9f227a58e8d 100644
+--- a/core/tools/aidlc-tiers.ts
++++ b/core/tools/aidlc-tiers.ts
+@@ -75,6 +75,8 @@ export type KiroEffort = "low" | "medium" | "high" | "xhigh" | "max";
+ /** opencode agent-frontmatter `variant` values (provider-specific reasoning
+  *  effort; the Anthropic-on-Bedrock provider accepts these). */
+ export type OpencodeVariant = "low" | "medium" | "high" | "max";
++/** Coding Harness agent-frontmatter `thinkingLevel` values (every effort is native). */
++export type HarnessThinkingLevel = "low" | "medium" | "high" | "xhigh" | "max";
+ 
+ /** Per-harness projection of one tier. A `null` model or effort means the
+  *  harness-native key is OMITTED so the harness's own session/config default
+@@ -108,6 +110,11 @@ export type TierProjection = {
+    *  accounts reject every named model), so a pinned id would hard-fail
+    *  installs on lower plans; agents inherit the session model instead. */
+   cursor: { model: string | null };
++  /** Coding Harness task-agent .md frontmatter: `model:` (a model pattern or
++   *  `@role` alias) and optional `thinkingLevel:`. Omitted keys inherit the
++   *  harness's task-agent defaults — the same inherit-by-omission contract as
++   *  opencode. Model access is harness-owned, so no tier pins a model. */
++  harness: { model: string | null; thinkingLevel: HarnessThinkingLevel | null };
+ };
+ 
+ export type Harness = keyof TierProjection;
+@@ -124,6 +131,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
+     opencode: { model: null, variant: null },
+     copilot: { model: null },
+     cursor: { model: null },
++    harness: { model: null, thinkingLevel: null },
+   },
+   balanced: {
+     // Effort pinned to medium (was: inherit the session effort). Balanced is
+@@ -137,6 +145,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
+     kiro: { model: null },
+     opencode: { model: null, variant: "medium" },
+     copilot: { model: null },
++    harness: { model: null, thinkingLevel: "medium" },
+   },
+   templated: {
+     // The tier remains a models-dial group for pattern-following work, but the
+@@ -148,6 +157,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
+     opencode: { model: null, variant: null },
+     copilot: { model: null },
+     cursor: { model: null },
++    harness: { model: null, thinkingLevel: null },
+   },
+ };
+ 
+diff --git a/scripts/manifest-types.ts b/scripts/manifest-types.ts
+index 0ced6c847abebac7c21aaaf99ae0e7725679fc75..5e4adaea463958182ce1d070075643cc2a7d9e49 100644
+--- a/scripts/manifest-types.ts
++++ b/scripts/manifest-types.ts
+@@ -134,7 +134,7 @@ export type HarnessManifest = {
+    * new harness picks its projection shape in its manifest - the packager
+    * never infers it from the harness name.
+    */
+-  tierFlavor: "claude" | "codex" | "kiro" | "opencode" | "copilot" | "cursor";
++  tierFlavor: "claude" | "codex" | "kiro" | "opencode" | "copilot" | "cursor" | "harness";
+   /** core/<src> → <harnessDir>/<dst> projections. */
+   coreDirs: DirMap[];
+   /** harness/<name>/<src> → <harnessDir>/<dst> authored-file copies. */
+diff --git a/scripts/package.ts b/scripts/package.ts
+index f478afdae906bcd1f9079b0b40ccd0d5165f216b..24ba03a4b3f5b9a115b509831f7e566e752601c0 100644
+--- a/scripts/package.ts
++++ b/scripts/package.ts
+@@ -302,7 +302,7 @@ function projectTierFrontmatter(
+     TIER_CAP,
+   );
+   return writeMarkdownAgentSurface(s, effective, {
+-    effortKey: harness === "opencode" ? "variant" : "effort",
++    effortKey: harness === "opencode" ? "variant" : harness === "harness" ? "thinkingLevel" : "effort",
+   });
+ }
+ 
