@@ -1,0 +1,4 @@
+upstream/
+out/
+node_modules/
+*.log
