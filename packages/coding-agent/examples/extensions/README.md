@@ -51,6 +51,12 @@ cp permission-gate.ts ~/.harness/agent/extensions/
 | `git-checkpoint.ts`      | Creates git stash checkpoints at each turn for code restoration on branch |
 | `auto-commit-on-exit.ts` | Auto-commits on exit using last assistant message for commit message      |
 
+### Code Quality
+
+| Extension       | Description                                                                                          |
+| --------------- | ---------------------------------------------------------------------------------------------------- |
+| `code-quality/` | Five hooks (gate, checkers, approach, history, grain) that steer edits toward mergeable changes; see its README |
+
 ### System Prompt & Compaction
 
 | Extension              | Description                                                           |
