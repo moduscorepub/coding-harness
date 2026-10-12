@@ -15,3 +15,10 @@ Apply in order with `git am -3 patches/*.patch`. See [../GRAFTING.md](../GRAFTIN
 | [`0008-feat-release-harness-in-release-verification-and-bin.patch`](0008-feat-release-harness-in-release-verification-and-bin.patch) | feat(release): harness in release verification and binary gates | 3 |
 | [`0009-feat-core-shared-content-lists-Coding-Harness.patch`](0009-feat-core-shared-content-lists-Coding-Harness.patch) | feat(core): shared content lists Coding Harness | 9 |
 | [`0010-test-harness-deterministic-and-live-coverage.patch`](0010-test-harness-deterministic-and-live-coverage.patch) | test(harness): deterministic and live coverage | 19 |
+| [`0011-feat-harness-cross-vendor-review-routing-A1.patch`](0011-feat-harness-cross-vendor-review-routing-A1.patch) | feat(harness): cross-vendor review routing (A1) | 5 |
+| [`0012-feat-harness-continuous-advisors-on-construction-age.patch`](0012-feat-harness-continuous-advisors-on-construction-age.patch) | feat(harness): continuous advisors on construction agents (A2) | 7 |
+| [`0013-feat-harness-AI-DLC-contracts-as-stream-time-rules-A.patch`](0013-feat-harness-AI-DLC-contracts-as-stream-time-rules-A.patch) | feat(harness): AI-DLC contracts as stream-time rules (A3) | 9 |
+| [`0014-feat-harness-state-anchored-compaction-A4.patch`](0014-feat-harness-state-anchored-compaction-A4.patch) | feat(harness): state-anchored compaction (A4) | 4 |
+| [`0015-feat-core-project-checks-sensor-and-aidlc-checkers-d.patch`](0015-feat-core-project-checks-sensor-and-aidlc-checkers-d.patch) | feat(core): project-checks sensor and /aidlc-checkers discovery (B1) | 27 |
+| [`0016-feat-harness-prewalk-handoff-on-the-developer-agent-.patch`](0016-feat-harness-prewalk-handoff-on-the-developer-agent-.patch) | feat(harness): prewalk handoff on the developer agent (B3) | 4 |
+| [`0017-feat-harness-debugger-first-diagnosis-in-a-bugfix-B4.patch`](0017-feat-harness-debugger-first-diagnosis-in-a-bugfix-B4.patch) | feat(harness): debugger-first diagnosis in a bugfix (B4) | 12 |

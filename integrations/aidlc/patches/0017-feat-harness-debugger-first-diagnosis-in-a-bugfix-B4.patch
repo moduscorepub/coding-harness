@@ -1,0 +1,460 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 07:50:48 +0100
+Subject: [PATCH 17/17] feat(harness): debugger-first diagnosis in a bugfix
+ (B4)
+
+---
+ docs/guide/harnesses/coding-harness.md        | 19 +++++
+ harness/harness/emit.ts                       | 37 ++++++++-
+ harness/harness/host/adapter.ts               | 63 +++++++++++----
+ harness/harness/skills/aidlc/SKILL.md         | 18 +++++
+ tests/e2e/t-rpc-harness-live.serial.test.ts   | 77 +++++++++++++++++++
+ tests/fixtures/bugfix-py/cart/__init__.py     |  0
+ tests/fixtures/bugfix-py/cart/pricing.py      | 12 +++
+ tests/fixtures/bugfix-py/pyproject.toml       |  4 +
+ tests/fixtures/bugfix-py/tests/__init__.py    |  0
+ .../fixtures/bugfix-py/tests/check_pricing.py | 15 ++++
+ tests/unit/t-harness-adapter-map.test.ts      | 26 ++++++-
+ tests/unit/t-harness-emit.test.ts             | 12 ++-
+ 12 files changed, 266 insertions(+), 17 deletions(-)
+ create mode 100644 tests/fixtures/bugfix-py/cart/__init__.py
+ create mode 100644 tests/fixtures/bugfix-py/cart/pricing.py
+ create mode 100644 tests/fixtures/bugfix-py/pyproject.toml
+ create mode 100644 tests/fixtures/bugfix-py/tests/__init__.py
+ create mode 100644 tests/fixtures/bugfix-py/tests/check_pricing.py
+
+diff --git a/docs/guide/harnesses/coding-harness.md b/docs/guide/harnesses/coding-harness.md
+index 3f1e76a0674875b966e9b9624814a62d1023f6c1..8c548235fb89aa6fe988f6533cbfa97abc3147eb 100644
+--- a/docs/guide/harnesses/coding-harness.md
++++ b/docs/guide/harnesses/coding-harness.md
+@@ -228,6 +228,25 @@ a no-op. Override per agent with the harness's own `task.agentPrewalk` setting
+ `/agents`). For the conductor itself, use the harness's session-level
+ `prewalk.enabled`.
+ 
++### The debugger in a bugfix
++
++In a bugfix, the agent diagnoses the defect from the running program before it
++edits source: it reproduces the failure, launches the reproduction under the
++harness `debug` tool, reads the values at a breakpoint near the suspected fault,
++and writes those observed values into the diagnosis. The conductor's skill and
++`aidlc-developer-agent` both say so. While the active intent's scope is
++`bugfix`, the adapter also writes a derived rule,
++`aidlc/.aidlc-sessions/harness/rules/aidlc-debug-first.md`, that holds each
++session's first source edit until the defect has been observed (the harness
++injects a rule once per session, so the retried edit goes through). Sessions
++pick it up when they start, so it reaches the agents a bugfix dispatches.
++
++Python needs `debugpy` in the project's `.venv` (the harness looks for `python`
++there first); Node uses the JavaScript debug adapter, native code lldb or gdb,
++Go `dlv`. When no adapter applies, the agent says so in the diagnosis. In the
++bugfix scope the plan-approval fence is off, so the debugger also runs during
++Code Generation planning.
++
+ ## Alongside Claude Code
+ 
+ One project can carry both distributions: run `aidlc config --harness claude`
+diff --git a/harness/harness/emit.ts b/harness/harness/emit.ts
+index 08e26bf775aff47a083a629ea216005e09577bd6..14329b64366d8036f5206130a3e40a50281e0722 100644
+--- a/harness/harness/emit.ts
++++ b/harness/harness/emit.ts
+@@ -49,6 +49,33 @@ const HOST_AGENT_KEYS: Record<string, string[]> = {
+   developer: ["advisor: true", "prewalk: true"],
+ };
+ 
++// Coding Harness's `debug` tool drives a real debugger (DAP). A bugfix's
++// diagnosis gains observed program state instead of reasoning from source alone;
++// the conductor (skill) and the developer (agent body) both carry it.
++export const DEBUGGER_GUIDANCE = `### Diagnose a defect with the debugger
++
++In a bugfix the cause comes from the running program, not from reading the
++source, however obvious the source makes it look. Once the failure reproduces
++(the failing test or command) and the \`debug\` tool has an adapter for the
++language (debugpy for Python, installed in the project's \`.venv\`; the
++JavaScript debug adapter for Node; lldb or gdb for native code; dlv for Go), you
++MUST, before any edit to source:
++
++1. launch the reproduction under the \`debug\` tool;
++2. set a breakpoint on the line where the fault is suspected and run to it;
++3. read the variables there.
++
++Write the observed values (for example \`retries = 0\` where the loop expects 3)
++into the diagnosis the stage records, the requirements for the defect or the
++code-generation plan, so the approver sees the evidence. Skip the debugger only
++when no adapter applies, and say so in the diagnosis.
++`;
++
++// Harness-only body text a persona gains on this host, keyed like HOST_AGENT_KEYS.
++const HOST_AGENT_BODY: Record<string, string> = {
++  developer: DEBUGGER_GUIDANCE,
++};
++
+ // Rewrite a core persona .md into its harness task-agent twin.
+ function emitAgentMd(raw: string, srcPath: string, tierCap: EmitContext["tierCap"]): string {
+   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+@@ -63,12 +90,14 @@ function emitAgentMd(raw: string, srcPath: string, tierCap: EmitContext["tierCap
+   }
+   const agentName = modelAgentName(srcPath);
+   const effective = resolveModelPolicy(null, agentName, tierMatch[1] as Tier, "harness", tierCap);
+-  return writeMarkdownAgentSurface(raw, effective, {
++  const text = writeMarkdownAgentSurface(raw, effective, {
+     effortKey: "thinkingLevel",
+     // The harness has no per-agent turn cap; the persona's Turn Budget prose carries the guidance.
+     removeKeys: ["disallowedTools", "maxTurns", "thinking", "spawns"],
+     afterProjectionLines: [...(disallowedMatch ? ["spawns: []"] : []), ...(HOST_AGENT_KEYS[agentName] ?? [])],
+   });
++  const body = HOST_AGENT_BODY[agentName];
++  return body ? `${text.trimEnd()}\n\n${body}` : text;
+ }
+ 
+ // Method references in persona bodies point at the shipped default space.
+@@ -153,6 +182,12 @@ const SKILL_REWRITES: Array<{ from: RegExp; to: string; label: string }> = [
+     to: "tell the user to start a new session with `/new`, then invoke `/aidlc`",
+     label: "fresh session",
+   },
++  {
++    // Appended after the conductor's craft paragraph: the harness debugger in a bugfix diagnosis.
++    from: /^Everything above is mechanism\. .*$/m,
++    to: `$&\n\n${DEBUGGER_GUIDANCE.trimEnd()}`,
++    label: "debugger guidance",
++  },
+ ];
+ 
+ export function deriveSkill(claudeSkill: string): string {
+diff --git a/harness/harness/host/adapter.ts b/harness/harness/host/adapter.ts
+index 141c28f45f53dfe5c56cb731c40e77cd6ba4810d..c0381252466b6e54c7ad2d629ecfcaa6fde5306f 100644
+--- a/harness/harness/host/adapter.ts
++++ b/harness/harness/host/adapter.ts
+@@ -34,9 +34,11 @@
+ // unchanged either way), the AI-DLC method tree is injected into the system
+ // prompt from host/includes.json (the harness has no project include config),
+ // reviewer subagents are routed to a model family other than the builder's
+-// (`before_subagent_spawn`; AI-DLC setting harness.reviewDiversity), the
+-// compaction summary is built from the workflow record, and a turn that crosses
+-// a stage boundary compacts once context use reaches harness.compactAtStageBoundary.
++// (`before_subagent_spawn`; AI-DLC setting harness.reviewDiversity), the AI-DLC
++// contracts run as stream-time rules (host/rules, plus rules derived from the
++// method and the active scope), the compaction summary is built from the
++// workflow record, and a turn that crosses a stage boundary compacts once
++// context use reaches harness.compactAtStageBoundary.
+ 
+ import { spawn } from "node:child_process";
+ import { createHash } from "node:crypto";
+@@ -775,22 +777,55 @@ function noMocksRule(practices: string[]): string {
+   ].join("\n");
+ }
+ 
+-/** Write (or remove) the rules derived from the method; the directory when it holds one. */
++// A bugfix's first source edit in a session waits until the defect has been
++// observed under the debugger. The harness injects a rule once per session, so
++// the retried edit goes through.
++const SOURCE_GLOBS = ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs", "*.cjs", "*.py", "*.go", "*.rs", "*.java", "*.kt", "*.cs", "*.rb", "*.php", "*.swift", "*.c", "*.cc", "*.cpp", "*.h", "*.hpp"];
++const DEBUG_FIRST_RULE = [
++  "---",
++  'description: "AI-DLC bugfix: observe the defect under the debugger before the first source edit"',
++  'condition: ".*"',
++  `scope: "${SOURCE_GLOBS.flatMap(glob => [`tool:edit(${glob})`, `tool:write(${glob})`]).join(", ")}"`,
++  "interruptMode: tool-only",
++  "---",
++  "",
++  "This is the first source edit of a bugfix. If the defect has not yet been observed under the `debug` tool,",
++  "do that now, before this edit: launch the failing test or command under `debug`, set a breakpoint where the",
++  "fault is suspected, run to it and read the variables. Record the observed values in the diagnosis (the",
++  "requirements for the defect or the code-generation plan), then make the edit. When no debug adapter applies",
++  "to the language, say so in the diagnosis and make the edit.",
++  "",
++].join("\n");
++
++/** The active intent's scope, or null without a workflow. */
++export function activeScope(cwd: string): string | null {
++  const record = activeRecordDir(cwd);
++  return record ? stateField(readText(join(record, "aidlc-state.md")) ?? "", "Scope") : null;
++}
++
++/** Write (or remove) the rules derived from the method and the active scope; the directory when it holds one. */
+ export function writeDerivedRules(cwd: string): string | null {
+   const dir = join(cwd, DERIVED_RULES_DIR);
+-  const file = join(dir, "aidlc-no-mocks.md");
+   const practices = noMockPractices(cwd);
++  const wanted: Record<string, string | null> = {
++    "aidlc-no-mocks.md": practices.length > 0 ? noMocksRule(practices) : null,
++    "aidlc-debug-first.md": activeScope(cwd) === "bugfix" ? DEBUG_FIRST_RULE : null,
++  };
+   try {
+-    if (practices.length === 0) {
+-      rmSync(file, { force: true });
+-      return null;
+-    }
+-    const text = noMocksRule(practices);
+-    if (readText(file) !== text) {
+-      mkdirSync(dir, { recursive: true });
+-      writeFileSync(file, text);
++    let held = false;
++    for (const [name, text] of Object.entries(wanted)) {
++      const file = join(dir, name);
++      if (text === null) {
++        rmSync(file, { force: true });
++        continue;
++      }
++      held = true;
++      if (readText(file) !== text) {
++        mkdirSync(dir, { recursive: true });
++        writeFileSync(file, text);
++      }
+     }
+-    return dir;
++    return held ? dir : null;
+   } catch {
+     return null;
+   }
+diff --git a/harness/harness/skills/aidlc/SKILL.md b/harness/harness/skills/aidlc/SKILL.md
+index 0e274f7771588460ea5ef34fc230c73c45c0423c..2a5049b625e56b4271451469c21924e811e114f5 100644
+--- a/harness/harness/skills/aidlc/SKILL.md
++++ b/harness/harness/skills/aidlc/SKILL.md
+@@ -180,6 +180,24 @@ For directives not already handled by Construction routing, `run-stage` folds th
+ 
+ Everything above is mechanism. The irreducible knowledge-work — how to run a stage *well* (framing the persona, asking good questions, keeping the diary when enabled, the intra-stage Keep/Modify/Redo loop, classifying a practices-derived gate) — is authored once as the shared conductor persona. You do **not** load it from a path: the engine reads it and bakes its contents into the first `run-stage` directive of the workflow (the directive carries a `conductor_persona` field). When you receive that field, adopt it for the whole run — it is your execution-quality charter. This keeps every entry point (framework and hand-written) on one persona with no per-skill diligence.
+ 
++### Diagnose a defect with the debugger
++
++In a bugfix the cause comes from the running program, not from reading the
++source, however obvious the source makes it look. Once the failure reproduces
++(the failing test or command) and the `debug` tool has an adapter for the
++language (debugpy for Python, installed in the project's `.venv`; the
++JavaScript debug adapter for Node; lldb or gdb for native code; dlv for Go), you
++MUST, before any edit to source:
++
++1. launch the reproduction under the `debug` tool;
++2. set a breakpoint on the line where the fault is suspected and run to it;
++3. read the variables there.
++
++Write the observed values (for example `retries = 0` where the loop expects 3)
++into the diagnosis the stage records, the requirements for the defect or the
++code-generation plan, so the approver sees the evidence. Skip the debugger only
++when no adapter applies, and say so in the diagnosis.
++
+ ---
+ 
+ ## Routing
+diff --git a/tests/e2e/t-rpc-harness-live.serial.test.ts b/tests/e2e/t-rpc-harness-live.serial.test.ts
+index a01876a7cf2af6c2d66d3c86e8115f5f0b99838e..d1a109a2dc9e507b7cd4cc394b8077bceebf2835 100644
+--- a/tests/e2e/t-rpc-harness-live.serial.test.ts
++++ b/tests/e2e/t-rpc-harness-live.serial.test.ts
+@@ -26,6 +26,8 @@
+ //     write that breaks the lint fails project-checks with the finding.
+ //   - S21: a dispatched developer hands off to the smol model at its first
+ //     write after recording its todos (prewalk).
++//   - S22: a Python bugfix is diagnosed under the debugger before the first
++//     source edit, and the diagnosis cites the values it observed.
+ //
+ // LIVE GATE: requires AIDLC_HARNESS_RPC_LIVE=1, Coding Harness >= 1.1.0
+ // (AIDLC_HARNESS_BIN or `harness` on PATH) and an Anthropic credential in
+@@ -493,6 +495,81 @@ describe("t-rpc-harness-live", () => {
+     20 * 60_000,
+   );
+ 
++  live(
++    "S22: a Python bugfix is diagnosed under the debugger before the fix, and the diagnosis cites observed values",
++    async () => {
++      const dir = project();
++      cpSync(join(REPO_ROOT, "tests", "fixtures", "bugfix-py"), dir, { recursive: true });
++      // The harness resolves `python` for debugpy from the project's .venv.
++      const venv = spawnSync("python3", ["-m", "venv", ".venv"], { cwd: dir, encoding: "utf-8" });
++      const pip = spawnSync(join(dir, ".venv", "bin", "pip"), ["install", "-q", "debugpy"], { cwd: dir, encoding: "utf-8" });
++      expect(venv.status === 0 && pip.status === 0, `${venv.stderr ?? ""}${pip.stderr ?? ""}`).toBe(true);
++      writeFileSync(join(dir, ".gitignore"), `${readFileSync(join(dir, ".gitignore"), "utf-8")}\n.venv/\n__pycache__/\n`);
++      const pricing = join(dir, "cart", "pricing.py");
++      const original = readFileSync(pricing, "utf-8");
++      const fixed = () => readFileSync(pricing, "utf-8") !== original;
++      const rpc = session(dir);
++      await rpc.start();
++      // Run the bugfix until the fix lands; what follows the first edit is not under test.
++      await rpc.prompt(
++        "/aidlc --scope bugfix cart_total() in cart/pricing.py returns -1000 instead of 4400 for four 1250-cent items " +
++          "with a 12 percent discount, and `.venv/bin/python -m unittest tests/check_pricing.py` fails. Fix the discount.",
++        { timeoutMs: 45 * 60_000, stopWhen: fixed },
++      );
++      for (let turn = 1; turn < 6 && !fixed(); turn++) {
++        await rpc.prompt("Continue the AI-DLC workflow.", { timeoutMs: 45 * 60_000, stopWhen: fixed });
++      }
++      const state = (await rpc.command({ type: "get_state" })).data as { sessionFile?: string };
++      await rpc.close();
++      expect(fixed(), "the fix reached cart/pricing.py").toBe(true);
++
++      // Every agent's tool calls, main session and subagents, in time order.
++      const main = String(state.sessionFile);
++      const artifacts = main.replace(/\.jsonl$/, "");
++      const transcripts = [
++        main,
++        ...(existsSync(artifacts) ? readdirSync(artifacts, { recursive: true }).map(String) : [])
++          .filter((name) => name.endsWith(".jsonl") && !name.includes("__advisor"))
++          .map((name) => join(artifacts, name)),
++      ];
++      const calls = transcripts
++        .flatMap((file) =>
++          readFileSync(file, "utf-8")
++            .split("\n")
++            .filter(Boolean)
++            .map((line) => JSON.parse(line) as { type?: string; timestamp?: string; message?: { role?: string; content?: Array<{ type?: string; name?: string; arguments?: unknown }> } })
++            .filter((entry) => entry.type === "message" && entry.message?.role === "assistant")
++            .flatMap((entry) =>
++              (entry.message?.content ?? [])
++                .filter((part) => part.type === "toolCall")
++                .map((part) => ({ at: String(entry.timestamp), name: String(part.name), args: JSON.stringify(part.arguments ?? {}) })),
++            ),
++        )
++        .sort((a, b) => a.at.localeCompare(b.at));
++      // An edit's target is its `path` (write, ast_edit) or the `[file#tag]` header of a hashline edit; the
++      // debugger is the `debug` tool or its `xd://debug` device.
++      const target = (call: { args: string }): string => {
++        const args = JSON.parse(call.args) as { path?: unknown; input?: unknown };
++        return typeof args.path === "string" ? args.path : (/^\[([^#\]]+)#/m.exec(String(args.input ?? ""))?.[1] ?? "");
++      };
++      const firstFix = calls.findIndex((call) => ["edit", "write", "ast_edit"].includes(call.name) && target(call).endsWith("cart/pricing.py"));
++      expect(firstFix, calls.map((call) => call.name).join(",")).toBeGreaterThan(-1);
++      const debugged = calls.slice(0, firstFix).filter((call) => call.name === "debug" || target(call).startsWith("xd://debug"));
++      expect(debugged.length, calls.slice(0, firstFix).map((call) => call.name).join(",")).toBeGreaterThan(0);
++
++      // The diagnosis carries what the breakpoint showed: a 6000-cent discount on a 5000-cent subtotal.
++      const intents = intentsDirOf(dir, DEFAULT_SPACE);
++      const record = join(intents, readFileSync(join(intents, "active-intent"), "utf-8").trim());
++      const diagnosis = readdirSync(record, { recursive: true })
++        .map(String)
++        .filter((name) => name.endsWith(".md") && !name.startsWith("audit") && !name.includes(".aidlc-engine"))
++        .map((name) => readFileSync(join(record, name), "utf-8"))
++        .join("\n");
++      expect(diagnosis).toContain("6000");
++    },
++    60 * 60_000,
++  );
++
+   // No model involved: the harness's own rule tester evaluates the shipped files.
+   (LIVE && binaryReady() ? test : test.skip)("S19a: the shipped stream rules trigger on what they guard and nothing else", () => {
+     const rules = join(DIST, ".harness-aidlc", "host", "rules");
+diff --git a/tests/fixtures/bugfix-py/cart/__init__.py b/tests/fixtures/bugfix-py/cart/__init__.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/tests/fixtures/bugfix-py/cart/pricing.py b/tests/fixtures/bugfix-py/cart/pricing.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..c9e755c83dd9dc3187d0669952a2f286c161251d
+--- /dev/null
++++ b/tests/fixtures/bugfix-py/cart/pricing.py
+@@ -0,0 +1,12 @@
++"""Cart pricing. Amounts are integer cents."""
++
++
++def line_total(item):
++    return item["price_cents"] * item["qty"]
++
++
++def cart_total(items, discount_pct=0):
++    """Subtotal of the items, less a whole-number percentage discount."""
++    subtotal = sum(line_total(item) for item in items)
++    discount = subtotal * discount_pct // 10
++    return subtotal - discount
+diff --git a/tests/fixtures/bugfix-py/pyproject.toml b/tests/fixtures/bugfix-py/pyproject.toml
+new file mode 100644
+index 0000000000000000000000000000000000000000..9a8a191e498162d16dff004be1ca78fdd35f9b18
+--- /dev/null
++++ b/tests/fixtures/bugfix-py/pyproject.toml
+@@ -0,0 +1,4 @@
++[project]
++name = "cart"
++version = "1.0.0"
++requires-python = ">=3.10"
+diff --git a/tests/fixtures/bugfix-py/tests/__init__.py b/tests/fixtures/bugfix-py/tests/__init__.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/tests/fixtures/bugfix-py/tests/check_pricing.py b/tests/fixtures/bugfix-py/tests/check_pricing.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..57e617d3608efa92d324dc9f92e11f49689f1afd
+--- /dev/null
++++ b/tests/fixtures/bugfix-py/tests/check_pricing.py
+@@ -0,0 +1,15 @@
++import unittest
++
++from cart.pricing import cart_total
++
++
++class CartTotal(unittest.TestCase):
++    def test_no_discount(self):
++        self.assertEqual(cart_total([{"price_cents": 1250, "qty": 4}]), 5000)
++
++    def test_percentage_discount(self):
++        self.assertEqual(cart_total([{"price_cents": 1250, "qty": 4}], 12), 4400)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/unit/t-harness-adapter-map.test.ts b/tests/unit/t-harness-adapter-map.test.ts
+index ca80ca3f1f68c7f7e97bbd1ca836f6fa4e6c0ec1..93749ad5f686ca25c2bdfa388ffa5718a4cd5656 100644
+--- a/tests/unit/t-harness-adapter-map.test.ts
++++ b/tests/unit/t-harness-adapter-map.test.ts
+@@ -5,7 +5,7 @@
+ // batch dispatch, and what never reaches a hook (main-only events in subagents,
+ // chained framework shell commands).
+ //
+-// covers: function:claudeCalls, function:taskItems, function:withTaskAssignments, function:withoutRecommended, function:askHookFields, function:bashBoundaryViolation, function:realPath, function:parseSensorFeedback, function:formatSensorFeedback, function:activeTodo, function:reviewerRouting, function:readHarnessSettings, function:approvedArtifacts, function:writeWatchdogContext, function:noMockPractices, function:writeDerivedRules, function:compactionSummary, function:changedFiles, function:currentStage, function:humanMessages
++// covers: function:claudeCalls, function:taskItems, function:withTaskAssignments, function:withoutRecommended, function:askHookFields, function:bashBoundaryViolation, function:realPath, function:parseSensorFeedback, function:formatSensorFeedback, function:activeTodo, function:reviewerRouting, function:readHarnessSettings, function:approvedArtifacts, function:writeWatchdogContext, function:noMockPractices, function:writeDerivedRules, function:compactionSummary, function:changedFiles, function:currentStage, function:humanMessages, function:activeScope
+ 
+ import { describe, expect, test } from "bun:test";
+ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+@@ -344,6 +344,30 @@ describe("derived stream rules", () => {
+       rmSync(dir, { recursive: true, force: true });
+     }
+   });
++
++  test("a bugfix intent adds the debug-first rule; another scope or no workflow removes it", () => {
++    const dir = mkdtempSync(join(tmpdir(), "t-harness-rules-"));
++    try {
++      const intents = join(dir, "aidlc", "spaces", "default", "intents");
++      mkdirSync(join(intents, "fix"), { recursive: true });
++      writeFileSync(join(intents, "active-intent"), "fix\n");
++      const state = (scope: string) => writeFileSync(join(intents, "fix", "aidlc-state.md"), `# State\n- **Scope**: ${scope}\n`);
++      const rule = join(dir, "aidlc", ".aidlc-sessions", "harness", "rules", "aidlc-debug-first.md");
++      state("bugfix");
++      expect(writeDerivedRules(dir)).toBe(join(dir, "aidlc", ".aidlc-sessions", "harness", "rules"));
++      expect(readFileSync(rule, "utf-8")).toContain("interruptMode: tool-only");
++      state("feature");
++      expect(writeDerivedRules(dir)).toBeNull();
++      expect(existsSync(rule)).toBe(false);
++      state("bugfix");
++      writeDerivedRules(dir);
++      rmSync(join(intents, "active-intent"));
++      expect(writeDerivedRules(dir)).toBeNull();
++      expect(existsSync(rule)).toBe(false);
++    } finally {
++      rmSync(dir, { recursive: true, force: true });
++    }
++  });
+ });
+ 
+ describe("state-anchored compaction", () => {
+diff --git a/tests/unit/t-harness-emit.test.ts b/tests/unit/t-harness-emit.test.ts
+index 17816d5eccaff54fd97d127505d7bd68d1dabfb9..4d9fd4ff127f735809e4e9264df51d242923ed7b 100644
+--- a/tests/unit/t-harness-emit.test.ts
++++ b/tests/unit/t-harness-emit.test.ts
+@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test";
+ import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+-import { assertSkillCurrent, includeFiles } from "../../harness/harness/emit.ts";
++import { assertSkillCurrent, DEBUGGER_GUIDANCE, includeFiles } from "../../harness/harness/emit.ts";
+ 
+ const REPO_ROOT = join(import.meta.dir, "..", "..");
+ const TREES = {
+@@ -164,4 +164,14 @@ describe("orchestrator skill", () => {
+       rmSync(root, { recursive: true, force: true });
+     }
+   });
++
++  test("the conductor and the developer carry the debugger guidance; no other persona does", () => {
++    for (const tree of Object.values(TREES)) {
++      expect(readFileSync(join(tree, ENGINE, "skills", "aidlc", "SKILL.md"), "utf-8")).toContain(DEBUGGER_GUIDANCE.trimEnd());
++      for (const name of readdirSync(join(tree, ENGINE, "host", "agents"))) {
++        const body = readFileSync(join(tree, ENGINE, "host", "agents", name), "utf-8");
++        expect(body.includes(DEBUGGER_GUIDANCE), name).toBe(name === "aidlc-developer-agent.md");
++      }
++    }
++  });
+ });

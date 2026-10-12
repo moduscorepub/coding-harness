@@ -1,0 +1,7 @@
+{
+  "id": "py-roman-subtractive",
+  "tags": ["bugfix", "py"],
+  "scope": "bugfix",
+  "request": "to_roman() in numerals/roman.py ignores subtractive notation: to_roman(4) returns 'IIII' instead of 'IV' and to_roman(1994) returns 'MDCCCCLXXXXIIII' instead of 'MCMXCIV'; `python3 -m unittest tests/check_roman.py` fails. Numbers outside 1..3999 raise ValueError.",
+  "hidden": ["python3", "__hidden__/check_roman.py"]
+}

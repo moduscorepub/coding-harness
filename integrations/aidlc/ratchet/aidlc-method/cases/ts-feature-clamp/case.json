@@ -1,0 +1,7 @@
+{
+  "id": "ts-feature-clamp",
+  "tags": ["feature", "ts"],
+  "scope": "express",
+  "request": "Add an exported clamp(value, min, max) to src/math.ts. It returns value limited to the range from min to max inclusive, and throws a RangeError when min is greater than max. Cover it in the project's tests.",
+  "hidden": ["bun", "test", "./__hidden__/clamp.check.ts"]
+}

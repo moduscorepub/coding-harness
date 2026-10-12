@@ -571,6 +571,8 @@ Path handling:
 - Missing paths and paths of the wrong kind are skipped with a debug log.
 - Results from several handlers are concatenated in extension load order.
 
+The AI-DLC integration uses every field except `themePaths`; see [AI-DLC on Coding Harness](./aidlc.md).
+
 ## Tool authoring details
 
 `registerTool` uses `ToolDefinition` from `types.ts`. Its `parameters` field accepts harnesstype schemas; the injected TypeBox compatibility shim remains available for legacy extensions.

@@ -1,0 +1,1395 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 06:41:54 +0100
+Subject: [PATCH 15/17] feat(core): project-checks sensor and /aidlc-checkers
+ discovery (B1)
+
+---
+ README.md                                     |   2 +-
+ .../stages/construction/build-and-test.md     |   1 +
+ .../stages/construction/code-generation.md    |   1 +
+ core/sensors/aidlc-project-checks.md          |  83 +++++
+ core/tools/aidlc-sensor-project-checks.ts     | 352 ++++++++++++++++++
+ core/tools/aidlc-sensor.ts                    |   8 +-
+ core/tools/aidlc.ts                           |   4 +
+ docs/guide/09-rules-and-the-learning-loop.md  |   5 +-
+ docs/guide/12-cli-commands.md                 |   2 +-
+ docs/guide/harnesses/coding-harness.md        |  10 +
+ docs/harness-engineering/06-sensors.md        |  14 +-
+ docs/reference/07-sensor-system.md            |  55 ++-
+ harness/harness/emit.ts                       |  13 +-
+ .../harness/host/prompts/aidlc-checkers.md    |  46 +++
+ scripts/build-binaries.ts                     |   1 +
+ tests/e2e/t-rpc-harness-live.serial.test.ts   |  52 ++-
+ tests/fixtures/checkers-app/package.json      |   9 +
+ tests/fixtures/checkers-app/scripts/lint.ts   |  20 +
+ tests/fixtures/checkers-app/src/sum.ts        |   3 +
+ tests/fixtures/checkers-app/test/sum.check.ts |   6 +
+ .../t-sensor-project-checks.test.ts           | 212 +++++++++++
+ tests/integration/t93.test.ts                 |   7 +-
+ .../t95-sensor-fire-hook-feature.test.ts      |   2 +-
+ tests/unit/gen-coverage-registry.test.ts      |   2 +
+ tests/unit/t-harness-emit.test.ts             |  12 +
+ .../unit/t227-tool-entrypoint-exports.test.ts |   1 +
+ tests/unit/t230-dispatcher-routes.test.ts     |   2 +
+ 27 files changed, 895 insertions(+), 30 deletions(-)
+ create mode 100644 core/sensors/aidlc-project-checks.md
+ create mode 100644 core/tools/aidlc-sensor-project-checks.ts
+ create mode 100644 harness/harness/host/prompts/aidlc-checkers.md
+ create mode 100644 tests/fixtures/checkers-app/package.json
+ create mode 100644 tests/fixtures/checkers-app/scripts/lint.ts
+ create mode 100644 tests/fixtures/checkers-app/src/sum.ts
+ create mode 100644 tests/fixtures/checkers-app/test/sum.check.ts
+ create mode 100644 tests/integration/t-sensor-project-checks.test.ts
+
+diff --git a/README.md b/README.md
+index 2f5de8b5c53d9cec277fd572466e76d0273445f4..90c4648bd95bf21c7258470a5a562f5c99a6dd5e 100644
+--- a/README.md
++++ b/README.md
+@@ -130,7 +130,7 @@ for the architecture and methodology.
+ ## Repository Layout
+ 
+ - `core/` - hand-authored, harness-neutral methodology and engine
+-- `core/tools/` - 75 aidlc-*.ts engine and authoring tools
++- `core/tools/` - 76 aidlc-*.ts engine and authoring tools
+ - `harness/<name>/` - thin, harness-specific manifests and integrations
+ - `plugins/<name>/` - optional AIDLC plugins
+ - `scripts/` - packaging, binary, installer, and release tooling
+diff --git a/core/aidlc-common/stages/construction/build-and-test.md b/core/aidlc-common/stages/construction/build-and-test.md
+index f7653b33d484a8a637174c2de4b87ef932d41859..ee4c1562b60647e656fcb3ea98b3f34760e579cf 100644
+--- a/core/aidlc-common/stages/construction/build-and-test.md
++++ b/core/aidlc-common/stages/construction/build-and-test.md
+@@ -29,6 +29,7 @@ sensors:
+   - required-sections
+   - upstream-coverage
+   - type-check
++  - project-checks
+ scopes:
+   - enterprise
+   - feature
+diff --git a/core/aidlc-common/stages/construction/code-generation.md b/core/aidlc-common/stages/construction/code-generation.md
+index 3b2897df372a89c2c3b8d25b6f8cb2c1e7c5536a..e0184a1722de7e57002609c10df68d9382c4edb6 100644
+--- a/core/aidlc-common/stages/construction/code-generation.md
++++ b/core/aidlc-common/stages/construction/code-generation.md
+@@ -45,6 +45,7 @@ sensors:
+   - required-sections
+   - linter
+   - type-check
++  - project-checks
+   - traceability
+ scopes:
+   - enterprise
+diff --git a/core/sensors/aidlc-project-checks.md b/core/sensors/aidlc-project-checks.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..65b28c89ac896f59f889d169f33f4e436ea73541
+--- /dev/null
++++ b/core/sensors/aidlc-project-checks.md
+@@ -0,0 +1,83 @@
++---
++id: project-checks
++kind: deterministic
++command: {{INVOKE}} engine sensor-project-checks
++default_severity: advisory
++description: Runs the project's own checkers from aidlc/spaces/<space>/checkers.json on a written source file
++category: code-quality
++fire_on: write
++matches: "**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs,py,go,rs,java,kt,kts,cs,rb,php,swift,c,cc,cpp,h,hpp,scala,sh,tf}"
++input_schema:
++  file_path: string
++output_schema:
++  pass: boolean
++  checkers:
++    - label: string
++      status: string
++  violations:
++    - checker: string
++      file: string
++      line: number
++      rule: string
++      message: string
++timeout_seconds: 120
++---
++
++# project-checks sensor
++
++Runs the checkers a project names for itself (its linter, type checker or a
++fast test command) against each source file written during a stage. The
++`linter` and `type-check` sensors guess the tool; this one runs exactly what the
++project configured.
++
++## Configuration
++
++`aidlc/spaces/<space>/checkers.json`:
++
++```json
++{
++  "schemaVersion": 1,
++  "checkers": [
++    {
++      "label": "eslint",
++      "command": ["node_modules/.bin/eslint", "--format=json", "{file}"],
++      "matches": "src/**/*.{ts,tsx}",
++      "parser": "eslint",
++      "timeoutSeconds": 30
++    },
++    {
++      "label": "unit tests",
++      "command": ["bun", "test"],
++      "matches": "src/**/*.ts",
++      "parser": "exit-code",
++      "timeoutSeconds": 60
++    }
++  ]
++}
++```
++
++- `command` is an argv array, never a shell string. `{file}` is replaced by the
++  written file's path relative to the checker's working directory; without it
++  the command checks the whole project. `node_modules/.bin` and `.venv/bin`
++  under the working directory are searched before `PATH`.
++- `cwd` (optional) is a project-relative working directory.
++- `matches` (optional, default every file) is a project-relative glob.
++- `parser` reads the output: `eslint` (`--format=json`), `ruff`
++  (`--output-format=json`), `generic` (`file:line:col: severity: message` lines
++  and `tsc --pretty false` output) or `exit-code` (a non-zero exit is a finding
++  carrying the output's last lines).
++- `timeoutSeconds` defaults to 30; all checkers share the sensor's 120-second
++  budget.
++
++Without the file, or when no checker matches the written file, the sensor
++passes with `Note=tool-unavailable`. A malformed file is a script error, so the
++fix is visible in the audit without failing writes.
++
++## Failure mode
++
++Emits `SENSOR_FAILED` when a checker reports an error-severity finding, and
++writes detail to
++`aidlc/spaces/<active-space>/intents/<active-intent>/.aidlc-engine/sensors/<stage-slug>/project-checks-<fire-id>.md`
++with each finding's checker, file, line, rule and message. Warnings are listed
++but do not fail. A checker whose executable is missing is skipped and one that
++times out is reported in `checkers`; neither fails the fire.
+diff --git a/core/tools/aidlc-sensor-project-checks.ts b/core/tools/aidlc-sensor-project-checks.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..130bad061caffca8e16984f1f006c6e5b8939c4c
+--- /dev/null
++++ b/core/tools/aidlc-sensor-project-checks.ts
+@@ -0,0 +1,352 @@
++// aidlc-sensor-project-checks.ts — per-sensor script for the `project-checks`
++// sensor (core/sensors/aidlc-project-checks.md documents the configuration).
++//
++// Runs the checkers the project lists in aidlc/spaces/<space>/checkers.json on
++// the file a stage just wrote and prints the dispatcher's stdout JSON:
++//
++//   {"pass": <bool>, "findings_count": <n>,
++//    "violations": [{checker, file, line, column, rule, severity, message}],
++//    "checkers": [{label, status: "pass"|"fail"|"skipped"|"timeout", note?}]}
++//
++// Violations come first: the failure detail file embeds this JSON as written,
++// and hosts that forward a detail excerpt to the model show its first lines.
++//
++// pass = no error-severity violation. A checker whose executable is missing is
++// skipped, and one that runs out of time is reported as a timeout; neither
++// fails the fire, because neither says anything about the written file.
++//
++// Exit codes:
++//   0   a verdict (the JSON pass field carries it)
++//   127 no checkers.json, or no checker matches the file (dispatcher: tool-unavailable)
++//   2   checkers.json is malformed (dispatcher: script-error, visible in the audit)
++//   1   bad invocation
++
++import { spawnSync } from "node:child_process";
++import { existsSync, readFileSync } from "node:fs";
++import { delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
++import { activeSpace, resolveProjectDir, resolveWorkflowSelection, spacesRoot } from "./aidlc-lib.ts";
++
++export const PROJECT_CHECK_PARSERS = ["eslint", "ruff", "generic", "exit-code"] as const;
++export type ProjectCheckParser = (typeof PROJECT_CHECK_PARSERS)[number];
++
++export interface ProjectChecker {
++	label: string;
++	command: string[];
++	cwd?: string;
++	matches?: string;
++	parser: ProjectCheckParser;
++	timeoutSeconds?: number;
++}
++
++export interface ProjectCheckViolation {
++	checker: string;
++	file: string;
++	line: number;
++	column: number;
++	rule: string;
++	severity: "error" | "warning";
++	message: string;
++}
++
++interface CheckerStatus {
++	label: string;
++	status: "pass" | "fail" | "skipped" | "timeout";
++	note?: string;
++}
++
++const DEFAULT_CHECKER_TIMEOUT_SECONDS = 30;
++// The manifest grants 120 seconds; keep headroom so the dispatcher never times
++// the whole fire out while a checker is still running.
++const SENSOR_BUDGET_MS = 110_000;
++const TAIL_LINES = 30;
++const TAIL_CHARS = 2_000;
++
++/** `aidlc/spaces/<space>/checkers.json` for the project's current space. */
++export function checkersFile(projectDir: string): string {
++	let space: string;
++	try {
++		space = resolveWorkflowSelection(projectDir).space;
++	} catch {
++		space = activeSpace(projectDir);
++	}
++	return join(spacesRoot(projectDir), space, "checkers.json");
++}
++
++/** Parse and validate checkers.json; throws with the first problem found. */
++export function parseCheckers(text: string): ProjectChecker[] {
++	const raw = JSON.parse(text) as unknown;
++	if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("checkers.json must be an object");
++	const { schemaVersion, checkers } = raw as { schemaVersion?: unknown; checkers?: unknown };
++	if (schemaVersion !== 1) throw new Error("checkers.json schemaVersion must be 1");
++	if (!Array.isArray(checkers)) throw new Error("checkers.json checkers must be an array");
++	return checkers.map((entry, index) => {
++		const where = `checkers[${index}]`;
++		if (!entry || typeof entry !== "object") throw new Error(`${where} must be an object`);
++		const { label, command, cwd, matches, parser, timeoutSeconds } = entry as Record<string, unknown>;
++		if (typeof label !== "string" || !label.trim()) throw new Error(`${where}.label must be a non-empty string`);
++		if (!Array.isArray(command) || command.length === 0 || !command.every((part) => typeof part === "string") || !command[0]) {
++			throw new Error(`${where}.command must be a non-empty argv array of strings`);
++		}
++		if (cwd !== undefined && typeof cwd !== "string") throw new Error(`${where}.cwd must be a string`);
++		if (matches !== undefined && (typeof matches !== "string" || !matches)) throw new Error(`${where}.matches must be a glob string`);
++		const parserId = parser ?? "generic";
++		if (!PROJECT_CHECK_PARSERS.includes(parserId as ProjectCheckParser)) {
++			throw new Error(`${where}.parser must be one of: ${PROJECT_CHECK_PARSERS.join(", ")}`);
++		}
++		if (timeoutSeconds !== undefined && (typeof timeoutSeconds !== "number" || !(timeoutSeconds > 0))) {
++			throw new Error(`${where}.timeoutSeconds must be a positive number`);
++		}
++		return {
++			label: label.trim(),
++			command: command as string[],
++			...(cwd !== undefined ? { cwd } : {}),
++			...(matches !== undefined ? { matches } : {}),
++			parser: parserId as ProjectCheckParser,
++			...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
++		};
++	});
++}
++
++function toPosix(path: string): string {
++	return path.split(sep).join("/");
++}
++
++function projectRelative(projectDir: string, base: string, file: string): string {
++	const rel = relative(projectDir, isAbsolute(file) ? file : resolve(base, file));
++	return rel.startsWith("..") || isAbsolute(rel) ? toPosix(file) : toPosix(rel);
++}
++
++function tail(stdout: string, stderr: string): string {
++	const lines = `${stdout}\n${stderr}`.split(/\r?\n/).filter((line) => line.trim() !== "");
++	const text = lines.slice(-TAIL_LINES).join("\n");
++	return text.length > TAIL_CHARS ? text.slice(-TAIL_CHARS) : text;
++}
++
++function jsonArray(stdout: string): unknown[] | null {
++	const start = stdout.indexOf("[");
++	if (start < 0) return null;
++	try {
++		const parsed = JSON.parse(stdout.slice(start)) as unknown;
++		return Array.isArray(parsed) ? parsed : null;
++	} catch {
++		return null;
++	}
++}
++
++const GCC_LINE = /^(.+?):(\d+):(\d+):\s*(?:(error|warning|note|info)\s*:)?\s*(.+)$/i;
++const TSC_LINE = /^(.+?)\((\d+),(\d+)\):\s*(error|warning)\s+([A-Z]+\d+):\s*(.+)$/;
++
++/** Turn one checker run into violations (file paths project-relative). */
++export function parseCheckerOutput(
++	checker: ProjectChecker,
++	result: { status: number | null; stdout: string; stderr: string },
++	projectDir: string,
++	checkerCwd: string,
++): ProjectCheckViolation[] {
++	const label = checker.label;
++	const failure = (): ProjectCheckViolation[] =>
++		result.status === 0
++			? []
++			: [{
++				checker: label,
++				file: "",
++				line: 0,
++				column: 0,
++				rule: `exit-${result.status}`,
++				severity: "error",
++				message: tail(result.stdout, result.stderr) || `${label} exited ${result.status}`,
++			}];
++	if (checker.parser === "exit-code") return failure();
++	if (checker.parser === "eslint" || checker.parser === "ruff") {
++		const entries = jsonArray(result.stdout);
++		if (!entries) return failure();
++		const out: ProjectCheckViolation[] = [];
++		for (const entry of entries as Array<Record<string, unknown>>) {
++			if (checker.parser === "eslint") {
++				for (const message of (entry.messages as Array<Record<string, unknown>> | undefined) ?? []) {
++					out.push({
++						checker: label,
++						file: projectRelative(projectDir, checkerCwd, String(entry.filePath ?? "")),
++						line: Number(message.line ?? 0),
++						column: Number(message.column ?? 0),
++						rule: String(message.ruleId ?? ""),
++						severity: message.severity === 2 || message.fatal === true ? "error" : "warning",
++						message: String(message.message ?? ""),
++					});
++				}
++			} else {
++				const location = (entry.location ?? {}) as Record<string, unknown>;
++				out.push({
++					checker: label,
++					file: projectRelative(projectDir, checkerCwd, String(entry.filename ?? "")),
++					line: Number(location.row ?? 0),
++					column: Number(location.column ?? 0),
++					rule: String(entry.code ?? ""),
++					severity: "error",
++					message: String(entry.message ?? ""),
++				});
++			}
++		}
++		return out;
++	}
++	const out: ProjectCheckViolation[] = [];
++	for (const line of `${result.stdout}\n${result.stderr}`.split(/\r?\n/)) {
++		const tsc = TSC_LINE.exec(line.trim());
++		if (tsc) {
++			out.push({
++				checker: label,
++				file: projectRelative(projectDir, checkerCwd, tsc[1]),
++				line: Number(tsc[2]),
++				column: Number(tsc[3]),
++				rule: tsc[5],
++				severity: tsc[4] === "warning" ? "warning" : "error",
++				message: tsc[6],
++			});
++			continue;
++		}
++		const gcc = GCC_LINE.exec(line.trim());
++		if (gcc) {
++			const level = gcc[4]?.toLowerCase();
++			out.push({
++				checker: label,
++				file: projectRelative(projectDir, checkerCwd, gcc[1]),
++				line: Number(gcc[2]),
++				column: Number(gcc[3]),
++				rule: "",
++				severity: level === undefined || level === "error" ? "error" : "warning",
++				message: gcc[5],
++			});
++		}
++	}
++	// A failing run that printed nothing recognisable must not read as clean.
++	return out.length > 0 ? out : failure();
++}
++
++function checkerEnv(cwd: string): NodeJS.ProcessEnv {
++	const local = [join(cwd, "node_modules", ".bin"), join(cwd, ".venv", "bin")].filter((dir) => existsSync(dir));
++	return { ...process.env, PATH: [...local, process.env.PATH ?? ""].join(delimiter) };
++}
++
++export interface ProjectChecksResult {
++	pass: boolean;
++	findings_count: number;
++	violations: ProjectCheckViolation[];
++	checkers: CheckerStatus[];
++}
++
++/** Run every checker that matches `filePath`; null when none applies. */
++export function runProjectChecks(
++	projectDir: string,
++	checkers: ProjectChecker[],
++	filePath: string,
++	budgetMs = SENSOR_BUDGET_MS,
++): ProjectChecksResult | null {
++	const absFile = resolve(filePath);
++	const relFile = toPosix(relative(projectDir, absFile));
++	const applicable = checkers.filter((checker) => !checker.matches || new Bun.Glob(checker.matches).match(relFile));
++	if (applicable.length === 0) return null;
++	const statuses: CheckerStatus[] = [];
++	const violations: ProjectCheckViolation[] = [];
++	const deadline = Date.now() + budgetMs;
++	for (const checker of applicable) {
++		const cwd = resolve(projectDir, checker.cwd ?? ".");
++		const inside = relative(projectDir, cwd);
++		if (inside.startsWith("..") || isAbsolute(inside)) {
++			statuses.push({ label: checker.label, status: "skipped", note: `cwd escapes the project: ${checker.cwd}` });
++			continue;
++		}
++		const remaining = deadline - Date.now();
++		if (remaining < 1_000) {
++			statuses.push({ label: checker.label, status: "skipped", note: "sensor time budget spent" });
++			continue;
++		}
++		const timeoutMs = Math.min((checker.timeoutSeconds ?? DEFAULT_CHECKER_TIMEOUT_SECONDS) * 1000, remaining);
++		const fileArg = toPosix(relative(cwd, absFile)) || ".";
++		const [binary, ...args] = checker.command.map((part) => part.split("{file}").join(fileArg));
++		const env = checkerEnv(cwd);
++		const executable = /[\\/]/.test(binary) ? resolve(cwd, binary) : (Bun.which(binary, { PATH: env.PATH ?? "" }) ?? null);
++		if (!executable || !existsSync(executable)) {
++			statuses.push({ label: checker.label, status: "skipped", note: `executable not found: ${binary}` });
++			continue;
++		}
++		const result = spawnSync(executable, args, { cwd, env, encoding: "utf-8", timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 });
++		const timedOut =
++			(result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT" ||
++			(result.status === null && result.signal === "SIGTERM");
++		if (timedOut) {
++			statuses.push({ label: checker.label, status: "timeout", note: `no result within ${Math.round(timeoutMs / 1000)}s` });
++			continue;
++		}
++		if (result.error) {
++			statuses.push({ label: checker.label, status: "skipped", note: `could not run: ${result.error.message}` });
++			continue;
++		}
++		const found = parseCheckerOutput(
++			checker,
++			{ status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" },
++			projectDir,
++			cwd,
++		);
++		violations.push(...found);
++		statuses.push({ label: checker.label, status: found.some((v) => v.severity === "error") ? "fail" : "pass" });
++	}
++	const errors = violations.filter((v) => v.severity === "error").length;
++	return { pass: errors === 0, findings_count: errors, violations, checkers: statuses };
++}
++
++// --- CLI ----------------------------------------------------------------------
++
++function printHelp(): void {
++	process.stdout.write(
++		"Usage: aidlc-sensor-project-checks --stage <slug> --file-path <path>\n\n" +
++			"Runs the checkers in aidlc/spaces/<space>/checkers.json that match <path>\n" +
++			"and prints {pass, findings_count, checkers[], violations[]} JSON to stdout.\n",
++	);
++}
++
++export function main(argv: string[]): void {
++	let stage = "";
++	let filePath = "";
++	for (let i = 0; i < argv.length; i++) {
++		const arg = argv[i];
++		if (arg === "--stage") stage = argv[++i] ?? "";
++		else if (arg === "--file-path") filePath = argv[++i] ?? "";
++		else if (arg === "--help" || arg === "-h") {
++			printHelp();
++			process.exit(0);
++		} else {
++			process.stderr.write(`unknown flag: ${arg}\n`);
++			process.exit(1);
++		}
++	}
++	if (!stage || !filePath) {
++		process.stderr.write("missing required flag: --stage and --file-path are both required\n");
++		process.exit(1);
++	}
++	if (!existsSync(filePath)) {
++		process.stderr.write(`file-path not found: ${filePath}\n`);
++		process.exit(1);
++	}
++	const projectDir = resolveProjectDir();
++	const file = checkersFile(projectDir);
++	if (!existsSync(file)) {
++		process.stderr.write("no-checkers\n");
++		process.exit(127);
++	}
++	let checkers: ProjectChecker[];
++	try {
++		checkers = parseCheckers(readFileSync(file, "utf-8"));
++	} catch (error) {
++		process.stderr.write(`checkers-config-error: ${relative(projectDir, file)}: ${(error as Error).message}\n`);
++		process.exit(2);
++	}
++	const result = runProjectChecks(projectDir, checkers, filePath);
++	if (!result) {
++		process.stderr.write("no-matching-checker\n");
++		process.exit(127);
++	}
++	process.stdout.write(`${JSON.stringify(result)}\n`);
++	process.exit(0);
++}
++
++if (import.meta.main) main(process.argv.slice(2));
+diff --git a/core/tools/aidlc-sensor.ts b/core/tools/aidlc-sensor.ts
+index e5a2219e81723885cb1eb68aae34e4f862b95b67..c33d4e1333679b9ff342e02b5524a42397b28e8e 100644
+--- a/core/tools/aidlc-sensor.ts
++++ b/core/tools/aidlc-sensor.ts
+@@ -75,6 +75,9 @@ import claimSourcesSensorSource from "../sensors/aidlc-claim-sources.md" with {
+ import linterSensorSource from "../sensors/aidlc-linter.md" with {
+ 	type: "text",
+ };
++import projectChecksSensorSource from "../sensors/aidlc-project-checks.md" with {
++	type: "text",
++};
+ import requiredSectionsSensorSource from "../sensors/aidlc-required-sections.md" with {
+ 	type: "text",
+ };
+@@ -94,6 +97,7 @@ const DEFAULT_TIMEOUT_SECONDS = 60;
+ const SENSOR_HELP_SOURCES = [
+ 	claimSourcesSensorSource,
+ 	linterSensorSource,
++	projectChecksSensorSource,
+ 	requiredSectionsSensorSource,
+ 	traceabilitySensorSource,
+ 	typeCheckSensorSource,
+@@ -311,6 +315,7 @@ export function resolveSensorScriptPath(id: string): string {
+ const BUNDLED_SENSOR_IDS = new Set([
+ 	"claim-sources",
+ 	"linter",
++	"project-checks",
+ 	"required-sections",
+ 	"traceability",
+ 	"type-check",
+@@ -545,7 +550,8 @@ function handleFire(args: string[]): void {
+ 	// e.g. reverse-engineering on greenfield) never produced its file,
+ 	// and demanding the output prose reference it would be a guaranteed
+ 	// false SENSOR_FAILED on every run of that stage in that scope.
+-	const isCodeSensor = id === "linter" || id === "type-check";
++	// Code sensors check the written file itself; the rest read stage artifacts.
++	const isCodeSensor = id === "linter" || id === "type-check" || id === "project-checks";
+ 	const scriptArgs: string[] = ["--stage", stageSlug];
+ 	if (isCodeSensor) {
+ 		scriptArgs.push("--file-path", outputPath);
+diff --git a/core/tools/aidlc.ts b/core/tools/aidlc.ts
+index ae0bf5fa53c3e6c3d697cf855e8379013588d00f..2f5c27871c32532236b9c454e428a776a6191ad5 100644
+--- a/core/tools/aidlc.ts
++++ b/core/tools/aidlc.ts
+@@ -138,6 +138,7 @@ export const TOOLS = {
+   sensor: "aidlc-sensor.ts",
+   sensorClaimSources: "aidlc-sensor-claim-sources.ts",
+   sensorLinter: "aidlc-sensor-linter.ts",
++  sensorProjectChecks: "aidlc-sensor-project-checks.ts",
+   sensorRequiredSections: "aidlc-sensor-required-sections.ts",
+   sensorTraceability: "aidlc-sensor-traceability.ts",
+   sensorTypeCheck: "aidlc-sensor-type-check.ts",
+@@ -154,6 +155,7 @@ export const TOOLS = {
+ const SENSOR_WORKERS = [
+   ["claim-sources", TOOLS.sensorClaimSources],
+   ["linter", TOOLS.sensorLinter],
++  ["project-checks", TOOLS.sensorProjectChecks],
+   ["required-sections", TOOLS.sensorRequiredSections],
+   ["traceability", TOOLS.sensorTraceability],
+   ["type-check", TOOLS.sensorTypeCheck],
+@@ -1702,6 +1704,7 @@ function resolveAlias(argv: string[], engineNamespace = false): Action | undefin
+     const scripts: Record<string, string> = {
+       "claim-sources": TOOLS.sensorClaimSources,
+       linter: TOOLS.sensorLinter,
++      "project-checks": TOOLS.sensorProjectChecks,
+       "required-sections": TOOLS.sensorRequiredSections,
+       traceability: TOOLS.sensorTraceability,
+       "type-check": TOOLS.sensorTypeCheck,
+@@ -2060,6 +2063,7 @@ const DELEGATES: Record<ToolFile, () => Promise<DelegateModule>> = {
+   "aidlc-runtime.ts": () => import("./aidlc-runtime.ts"),
+   "aidlc-sensor-claim-sources.ts": () => import("./aidlc-sensor-claim-sources.ts"),
+   "aidlc-sensor-linter.ts": () => import("./aidlc-sensor-linter.ts"),
++  "aidlc-sensor-project-checks.ts": () => import("./aidlc-sensor-project-checks.ts"),
+   "aidlc-sensor-required-sections.ts": () => import("./aidlc-sensor-required-sections.ts"),
+   "aidlc-sensor-traceability.ts": () => import("./aidlc-sensor-traceability.ts"),
+   "aidlc-sensor-type-check.ts": () => import("./aidlc-sensor-type-check.ts"),
+diff --git a/docs/guide/09-rules-and-the-learning-loop.md b/docs/guide/09-rules-and-the-learning-loop.md
+index 4e87c97b6a9f78874bac5238d77269bf15dd6548..5dfb11ba3e793805ebac683941cbe4fb75cabfe5 100644
+--- a/docs/guide/09-rules-and-the-learning-loop.md
++++ b/docs/guide/09-rules-and-the-learning-loop.md
+@@ -143,9 +143,9 @@ A sensor result is **advisory** in this release. A failing sensor produces an au
+ 
+ Sensor activity shows up in the intent's `audit/` shards as `Sensor Fired`, `Sensor Passed`, and `Sensor Failed` rows. A failed row links to a detail file (for example `<record>/.aidlc-engine/sensors/<stage-slug>/required-sections-<timestamp>.md`) that lists the specific gap - the missing headings, the unreferenced upstream artifact, the lint error. The audit log is covered in [State and Audit](10-state-and-audit.md).
+ 
+-### The six framework sensors
++### The seven framework sensors
+ 
+-Six sensors ship with the framework:
++Seven sensors ship with the framework:
+ 
+ | Sensor | Fires on | Checks |
+ |--------|----------|--------|
+@@ -155,6 +155,7 @@ Six sensors ship with the framework:
+ | `traceability` | `traceability.json` stage artifacts | Stable upstream IDs are declared and covered, statuses and targets are valid, and deterministic downstream targets exist |
+ | `linter` | `.ts` / `.js` code outputs | Wraps your configured linter (ESLint by default) |
+ | `type-check` | `.ts` / `.tsx` code outputs | Wraps your configured type-checker (`tsc` by default) |
++| `project-checks` | Source files in Code Generation and Build and Test | Runs the checkers your project lists in `aidlc/spaces/<space>/checkers.json` (lint, type check, fast tests); passes without checking anything when that file is absent |
+ 
+ Each stage declares which sensors fire on its outputs. You can add your own sensors — author a manifest under `.claude/sensors/`, then add its id to the stages that should run it. The learning loop can also install a sensor for you when you confirm one at a gate. The manifest format, the per-stage matrix, and the authoring walkthrough live in [Sensor System](../reference/07-sensor-system.md). For adding one to your own project, see [Customization](13-customization.md).
+ 
+diff --git a/docs/guide/12-cli-commands.md b/docs/guide/12-cli-commands.md
+index 3113eebc187d28c24e620624a1ff3c9a311f6fb7..1ce425e76b675583720c95aa997089ed33649d71 100644
+--- a/docs/guide/12-cli-commands.md
++++ b/docs/guide/12-cli-commands.md
+@@ -2253,7 +2253,7 @@ still runs the diagnostic described here.
+ | `describe <id>` | Print one Sensor's full manifest (command, default severity, `matches` glob, timeout) |
+ | `fire <id> --stage <slug> --output-path <path>` | Run a Sensor against a file and emit a `SENSOR_FIRED` row plus its paired result row |
+ 
+-A manual fire emits a `SENSOR_FIRED` audit row, then exactly one terminal row: `SENSOR_PASSED`, `SENSOR_FAILED`, or `SENSOR_BUDGET_OVERRIDE`, followed by a compact JSON verdict line. A failure writes a detail file under `<record>/.aidlc-engine/sensors/<stage>/` (in the intent's record dir). The fire command still exits 0 for sensor outcomes. With Sensors `on`, gate entry separately enforces `blocking` bindings and requires a verified pass; findings, unavailable tools, script/dispatcher errors, malformed verdicts, and timeouts all stop it. The interactive override is a separate logged `Fix findings` / `Override blocking sensors` decision, followed by the exact human-backed answer and a retry using `--override-blocking-sensors --user-input "Override blocking sensors"`; autonomous mode cannot override. Write-fired results remain advisory. The six Sensors that ship with the framework are `claim-sources`, `required-sections`, `upstream-coverage`, `traceability`, `linter`, and `type-check`.
++A manual fire emits a `SENSOR_FIRED` audit row, then exactly one terminal row: `SENSOR_PASSED`, `SENSOR_FAILED`, or `SENSOR_BUDGET_OVERRIDE`, followed by a compact JSON verdict line. A failure writes a detail file under `<record>/.aidlc-engine/sensors/<stage>/` (in the intent's record dir). The fire command still exits 0 for sensor outcomes. With Sensors `on`, gate entry separately enforces `blocking` bindings and requires a verified pass; findings, unavailable tools, script/dispatcher errors, malformed verdicts, and timeouts all stop it. The interactive override is a separate logged `Fix findings` / `Override blocking sensors` decision, followed by the exact human-backed answer and a retry using `--override-blocking-sensors --user-input "Override blocking sensors"`; autonomous mode cannot override. Write-fired results remain advisory. The seven Sensors that ship with the framework are `claim-sources`, `required-sections`, `upstream-coverage`, `traceability`, `linter`, `type-check`, and `project-checks`.
+ 
+ ```
+ bun .claude/tools/aidlc-sensor.ts list
+diff --git a/docs/guide/harnesses/coding-harness.md b/docs/guide/harnesses/coding-harness.md
+index 7997f4cf177e347839d5d746a0893674f2f44179..8ba142c199421e9f9704c10a40e3781561d3b2a3 100644
+--- a/docs/guide/harnesses/coding-harness.md
++++ b/docs/guide/harnesses/coding-harness.md
+@@ -206,6 +206,16 @@ Set the threshold in `aidlc.settings.json`; `0` turns it off:
+ { "harness": { "schemaVersion": 1, "compactAtStageBoundary": 60 } }
+ ```
+ 
++### Project checkers
++
++The `project-checks` sensor runs the project's own lint, type-check and fast test
++commands on every source file Code Generation or Build and Test writes (see
++[Sensor System](../../reference/07-sensor-system.md#project-checkers-project-checks)).
++Run `/aidlc-checkers` once to set it up: the agent reads the project's
++manifests and scripts, runs each candidate command, writes
++`aidlc/spaces/<space>/checkers.json` and shows what it recorded. Edit the file
++by hand afterwards as you like; other hosts read the same file.
++
+ ## Alongside Claude Code
+ 
+ One project can carry both distributions: run `aidlc config --harness claude`
+diff --git a/docs/harness-engineering/06-sensors.md b/docs/harness-engineering/06-sensors.md
+index 43238d10b6b52b220ca2055fefdb4689bfda4fbb..8edbab985c0fba0771e1d1787b7a689806f601fc 100644
+--- a/docs/harness-engineering/06-sensors.md
++++ b/docs/harness-engineering/06-sensors.md
+@@ -54,9 +54,9 @@ User Guide.
+ 
+ ---
+ 
+-## The six sensors that ship
++## The seven sensors that ship
+ 
+-Six manifests ship under `.claude/sensors/`, each prefixed `aidlc-`:
++Seven manifests ship under `.claude/sensors/`, each prefixed `aidlc-`:
+ 
+ | Manifest | Dispatch | Checks |
+ |----------|----------|--------|
+@@ -66,15 +66,16 @@ Six manifests ship under `.claude/sensors/`, each prefixed `aidlc-`:
+ | `aidlc-traceability.md` | Write: `**/traceability.json` | Validates stable upstream IDs, statuses, deterministic targets, and derived business-rule orphans |
+ | `aidlc-linter.md` | Write: `.ts` / `.js` | Wraps your configured linter (ESLint by default) |
+ | `aidlc-type-check.md` | Write: `.ts` / `.tsx` | Wraps your configured type-checker (`tsc` by default) |
++| `aidlc-project-checks.md` | Write: source files | Runs the project's own checkers from `aidlc/spaces/<space>/checkers.json` |
+ 
+-All six are gated by a `matches:` glob (more on that below): the provenance
++All seven are gated by a `matches:` glob (more on that below): the provenance
+ check and two document-shape checks scope to the artifact tree (the shipped manifests carry
+ `**/{aidlc-docs,intents}/**` — the per-intent record tree, with the legacy
+ `aidlc-docs/` arm kept for a pre-migration project), traceability scopes to
+ `**/traceability.json`, and the two code-quality checks to their language globs
+ (`**/*.{ts,js}`, `**/*.{ts,tsx}`).
+ Read `aidlc-required-sections.md` end to end before authoring your own — it is
+-the smallest of the six and shows the whole shape, frontmatter plus prose body.
++the smallest of the seven and shows the whole shape, frontmatter plus prose body.
+ 
+ ---
+ 
+@@ -143,7 +144,7 @@ short — five required fields and a handful of optional ones:
+ The `command:` is a **prefix**, not the full argv. The dispatcher appends the
+ runtime context at fire time — always `--stage <slug>`, then the file flag that
+ matches the sensor's input shape: `--output-path <path>` for document sensors,
+-`--file-path <path>` for the code sensors (`linter`, `type-check`). So the
++`--file-path <path>` for the code sensors (`linter`, `type-check`, `project-checks`). So the
+ manifest stays a pure capability descriptor and never encodes per-fire flags.
+ The exact invocation the dispatcher assembles is documented in the
+ [`command:` invocation contract](../reference/07-sensor-system.md#command-invocation-contract).
+@@ -185,7 +186,8 @@ For `fire_on: gate`, the state tool applies the same capability check to each
+ existing declared deliverable and dispatches only matching files; omitting
+ `matches` accepts every one. The
+ code-quality sensors set it to code globs (`aidlc-linter.md` uses
+-`**/*.{ts,js}`; `aidlc-type-check.md` uses `**/*.{ts,tsx}`) so they fire only on
++`**/*.{ts,js}`; `aidlc-type-check.md` uses `**/*.{ts,tsx}`; `aidlc-project-checks.md`
++lists source-file extensions and lets each configured checker narrow them) so they fire only on
+ code writes and stay quiet on prose; the document-shape sensors scope to the
+ artifact tree so they fire on any markdown artifact a stage writes.
+ Decide the file shape your check is meaningful for, and write the narrowest glob
+diff --git a/docs/reference/07-sensor-system.md b/docs/reference/07-sensor-system.md
+index a1554b1817a4c330d6d6242cfdaf78bd8b0633b6..a797a33e9c335a7355cb36a38855794e80f657fa 100644
+--- a/docs/reference/07-sensor-system.md
++++ b/docs/reference/07-sensor-system.md
+@@ -15,7 +15,7 @@ frames both as control-plane inputs that the compile resolves into each
+ stage node.
+ 
+ This chapter covers the manifest *file format* — what a sensor manifest
+-contains, how stages import sensors, and how the six shipped manifests
++contains, how stages import sensors, and how the seven shipped manifests
+ are configured. For the user-facing view of how sensors fire during a
+ workflow, see [Rules and the Learning Loop](../guide/09-rules-and-the-learning-loop.md)
+ in the User Guide.
+@@ -181,10 +181,10 @@ fires for the in-flight workflow (BGP-stability property — see
+ | `intent-capture` | `[claim-sources, required-sections, upstream-coverage]` (`claim-sources` checks visible inline provenance, authoritative source-register values, and exact human-confirmed assumptions across the stage's deliverables) |
+ | 6 other ideation, 6 other inception, 7 operation markdown stages | `[required-sections, upstream-coverage]` |
+ | `user-stories`, `domain-design`, `units-generation` | `[required-sections, upstream-coverage, traceability]` |
+-| `build-and-test` | `[required-sections, upstream-coverage, type-check]` (linter intentionally omitted — build runs canonical lint) |
++| `build-and-test` | `[required-sections, upstream-coverage, type-check, project-checks]` (linter intentionally omitted — build runs canonical lint) |
+ | `ci-pipeline` | `[required-sections, upstream-coverage, linter, type-check]` |
+ | 4 per-Unit construction-design stages (`functional-design`, `infrastructure-design`, `nfr-design`, `nfr-requirements`) | `[required-sections, upstream-coverage, linter, type-check, traceability]` |
+-| `code-generation` | `[linter, type-check, traceability]` |
++| `code-generation` | `[linter, type-check, project-checks, traceability]` |
+ 
+ Forks customise stages by editing the stage's `sensors:` list directly
+ — the binding lives next to the thing being customised. A manifest is a
+@@ -210,12 +210,13 @@ at compile time.
+ | `aidlc-traceability.md` | `**/traceability.json` |
+ | `aidlc-linter.md` | `**/*.{ts,js}` |
+ | `aidlc-type-check.md` | `**/*.{ts,tsx}` |
++| `aidlc-project-checks.md` | `**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs,py,go,rs,java,kt,kts,cs,rb,php,swift,c,cc,cpp,h,hpp,scala,sh,tf}` (each checker narrows it with its own `matches`) |
+ 
+ For `fire_on: write`, `matches` is the fire filter: the hook compares the path
+ being written against the glob and an entry without a glob never fires. For
+ `fire_on: gate`, `gate-start` and `revise` enumerate every existing declared
+ deliverable, skip paths outside each sensor's `matches` capability, and dispatch
+-only matching paths; an omitted glob accepts every deliverable. All six shipped
++only matching paths; an omitted glob accepts every deliverable. All seven shipped
+ manifests declare a glob. The compile resolver copies it into
+ `sensors_applicable[]`.
+ 
+@@ -286,7 +287,7 @@ the full argv — each shipped sensor names its own per-sensor script. The
+ dispatcher (`aidlc-sensor.ts`) appends runtime context at fire time: always
+ `--stage <stage-slug>`, then the file flag matching the sensor's input shape —
+ `--output-path <file>` for document sensors, `--file-path <file>` for the code
+-sensors (`linter`, `type-check`):
++sensors (`linter`, `type-check`, `project-checks`):
+ 
+ ```
+ <command> --stage <stage-slug> --output-path <file-being-written>   # document sensor
+@@ -395,12 +396,52 @@ is the one sanctioned stage-frontmatter edit: it grows the import list
+ (immutable in shape, not in contents), never the `## Steps` / `## Sensors`
+ / `## Learn` body.
+ 
+-The six shipped manifests illustrate the variation these defaults
++The seven shipped manifests illustrate the variation these defaults
+ later evolve into: `aidlc-claim-sources.md`, `aidlc-required-sections.md`, and
+ `aidlc-upstream-coverage.md` use `timeout_seconds: 5` with their
+ artifact-tree `matches` glob (the value shown in the `matches` table above);
+ `aidlc-linter.md` uses `30` with `matches: "**/*.{ts,js}"`;
+-`aidlc-type-check.md` uses `60` with `matches: "**/*.{ts,tsx}"`.
++`aidlc-type-check.md` uses `60` with `matches: "**/*.{ts,tsx}"`;
++`aidlc-project-checks.md` uses `120`, a budget its configured checkers share.
++
++---
++
++## Project checkers (`project-checks`)
++
++`linter` and `type-check` assume a TypeScript project with ESLint and `tsc`.
++`project-checks` runs whatever the project lists in
++`aidlc/spaces/<space>/checkers.json` instead:
++
++```json
++{
++  "schemaVersion": 1,
++  "checkers": [
++    { "label": "ruff", "command": [".venv/bin/ruff", "check", "--output-format=json", "{file}"], "matches": "**/*.py", "parser": "ruff" },
++    { "label": "tsc", "command": ["node_modules/.bin/tsc", "--noEmit", "--pretty", "false"], "matches": "src/**/*.ts", "parser": "generic", "timeoutSeconds": 60 },
++    { "label": "unit tests", "command": ["bun", "test"], "matches": "src/**/*.ts", "parser": "exit-code" }
++  ]
++}
++```
++
++| Field | Meaning |
++|---|---|
++| `label` | Name shown in findings |
++| `command` | argv array, never a shell string; `{file}` becomes the written file's path relative to `cwd`, and a command without it checks the whole project |
++| `cwd` | Optional project-relative working directory; its `node_modules/.bin` and `.venv/bin` are searched before `PATH` |
++| `matches` | Optional project-relative glob (default: every file) |
++| `parser` | `eslint` (`--format=json`), `ruff` (`--output-format=json`), `generic` (`file:line:col: severity: message` and `tsc --pretty false` lines; the default) or `exit-code` (a non-zero exit is one finding carrying the output's last 30 lines) |
++| `timeoutSeconds` | Optional, default 30; all checkers share the manifest's 120-second budget |
++
++An error-severity finding fails the fire; warnings are listed only. A failing
++run whose output the parser cannot read is itself a finding, so a broken
++checker never reads as a clean pass. A missing executable, a `cwd` outside the
++project and a timeout are reported in the verdict's `checkers` list without
++failing. With no `checkers.json`, or no checker matching the file, the fire
++passes with `Note=tool-unavailable`; a malformed file is a script error.
++
++Try the configuration without a workflow:
++`aidlc engine sensor-project-checks --stage code-generation --file-path <file>`.
++On Coding Harness, `/aidlc-checkers` finds the project's commands and writes the file.
+ 
+ ---
+ 
+diff --git a/harness/harness/emit.ts b/harness/harness/emit.ts
+index 23f5c2a138745cb95d51f1b3395c01fe2f105691..893c9ff69b76539ff3331566f1746818cc2c58e6 100644
+--- a/harness/harness/emit.ts
++++ b/harness/harness/emit.ts
+@@ -6,7 +6,7 @@
+ //     agents: core frontmatter with the `tier:` line projected to the harness-native
+ //     `model:` / `thinkingLevel:` keys, `disallowedTools: Task` projected to
+ //     `spawns: []`, body token-substituted → .harness-aidlc.
+-//   - .harness-aidlc/host/prompts/aidlc.md — the user-invoked /aidlc prompt template.
++//   - .harness-aidlc/host/prompts/*.md — the user-invoked /aidlc and /aidlc-checkers prompt templates.
+ //   - .harness-aidlc/host/includes.json — the method files the adapter injects into
+ //     the system prompt, derived from the Claude include stub so both hosts load
+ //     the same files in the same order.
+@@ -221,10 +221,13 @@ export default function emit(ctx: EmitContext): void {
+     });
+   }
+ 
+-  emissions.push({
+-    path: join(HOST, "prompts", "aidlc.md"),
+-    content: () => substituteToken(readFileSync(join(harnessRoot, "host", "prompts", "aidlc.md"), "utf-8")),
+-  });
++  for (const f of readdirSync(join(harnessRoot, "host", "prompts")).filter(x => x.endsWith(".md")).sort()) {
++    emissions.push({
++      path: join(HOST, "prompts", f),
++      content: () => substituteToken(readFileSync(join(harnessRoot, "host", "prompts", f), "utf-8")),
++    });
++  }
++
+   emissions.push({
+     path: join(HOST, "includes.json"),
+     content: () =>
+diff --git a/harness/harness/host/prompts/aidlc-checkers.md b/harness/harness/host/prompts/aidlc-checkers.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..d555c3861b996d593a036a1e83965f2f7f89c549
+--- /dev/null
++++ b/harness/harness/host/prompts/aidlc-checkers.md
+@@ -0,0 +1,46 @@
++---
++description: >
++  Find this project's own lint, type-check and fast test commands and record
++  them in aidlc/spaces/<space>/checkers.json, where the AI-DLC project-checks
++  sensor runs them on every source file a construction stage writes.
++---
++Set up the AI-DLC `project-checks` sensor for this project. This is discovery:
++do not edit project source files. Extra guidance from the human, if any:
++$ARGUMENTS
++
++1. The file to write is `aidlc/spaces/<space>/checkers.json`, where `<space>` is
++   the content of `aidlc/active-space` (`default` when that file is missing). If
++   the file exists, read it and keep every entry that still runs.
++2. Find the project's lint, type-check and test commands in its manifests,
++   configs, lockfiles, scripts and CI workflows. Prefer project-local binaries
++   (`node_modules/.bin`, `.venv/bin`, wrappers such as `gradlew`) over global ones.
++3. Give each command the parser that reads its output:
++
++   | parser | output |
++   |---|---|
++   | `eslint` | `eslint --format=json` |
++   | `ruff` | `ruff check --output-format=json` |
++   | `generic` | `file:line:col: severity: message` lines, or `tsc --noEmit --pretty false` |
++   | `exit-code` | anything; a non-zero exit is the finding (use it for test commands) |
++
++4. Put `{file}` where a command takes the file to check (linters). Leave it out
++   of whole-project commands (type checkers, tests). Give each entry a
++   `matches` glob for the files it covers and a `timeoutSeconds` it reliably
++   finishes within, at most 60; leave out test suites slower than that.
++5. Run each command once. A non-zero exit with output the parser reads is
++   fine; a crash or a usage error is not, so fix or drop that entry.
++6. Write the file. `command` is an argv array, never a shell string; `cwd` is
++   project-relative and optional:
++
++   ```json
++   {
++     "schemaVersion": 1,
++     "checkers": [
++       { "label": "eslint", "command": ["node_modules/.bin/eslint", "--format=json", "{file}"], "matches": "src/**/*.ts", "parser": "eslint", "timeoutSeconds": 30 }
++     ]
++   }
++   ```
++
++7. Check the result on one source file with
++   `{{INVOKE}} engine sensor-project-checks --stage code-generation --file-path <file>`
++   and show the human each checker's label, command and status.
+diff --git a/scripts/build-binaries.ts b/scripts/build-binaries.ts
+index 4a009ed8b9f5114b2b9bf54e4e414d01c466d4ca..cabcba4604fcf2c711c0a626ec20fd767ccb5abe 100644
+--- a/scripts/build-binaries.ts
++++ b/scripts/build-binaries.ts
+@@ -335,6 +335,7 @@ function sensorListGate(artifact: string): GateResult {
+   const expected = [
+     "claim-sources",
+     "linter",
++    "project-checks",
+     "required-sections",
+     "type-check",
+     "upstream-coverage",
+diff --git a/tests/e2e/t-rpc-harness-live.serial.test.ts b/tests/e2e/t-rpc-harness-live.serial.test.ts
+index 5485d0b0ba2f74783853c59f3c3c5dd1b1e7c438..c784277b44a797160c0f8437a81e43e8011579b6 100644
+--- a/tests/e2e/t-rpc-harness-live.serial.test.ts
++++ b/tests/e2e/t-rpc-harness-live.serial.test.ts
+@@ -22,6 +22,8 @@
+ //   - S18: a dispatched developer is advised against the approved artifacts.
+ //   - S19a/S19: the shipped stream rules match what they guard; a stub write is
+ //     interrupted before it reaches disk.
++//   - S20: /aidlc-checkers records the project's lint and test commands, and a
++//     write that breaks the lint fails project-checks with the finding.
+ //
+ // LIVE GATE: requires AIDLC_HARNESS_RPC_LIVE=1, Coding Harness >= 1.1.0
+ // (AIDLC_HARNESS_BIN or `harness` on PATH) and an Anthropic credential in
+@@ -44,6 +46,7 @@ import {
+ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+ import { stateDigest, writeActiveDirectiveMarker } from "../../core/tools/aidlc-lib.ts";
++import { parseCheckers } from "../../core/tools/aidlc-sensor-project-checks.ts";
+ import {
+   DEFAULT_RECORD_DIR,
+   DEFAULT_SPACE,
+@@ -94,9 +97,8 @@ function project(): string {
+   return dir;
+ }
+ 
+-/** A project with the brownfield-feature workflow active, at `stage`. */
+-function seededProject(stage: string): string {
+-  const dir = project();
++/** A project with the brownfield-feature workflow active, at `stage` (in `dir` when given). */
++function seededProject(stage: string, dir = project()): string {
+   const intentsDir = intentsDirOf(dir, DEFAULT_SPACE);
+   mkdirSync(seededRecordDir(dir), { recursive: true });
+   writeFileSync(join(intentsDir, "active-intent"), `${DEFAULT_RECORD_DIR}\n`);
+@@ -404,6 +406,50 @@ describe("t-rpc-harness-live", () => {
+     10 * 60_000,
+   );
+ 
++  live(
++    "S20: /aidlc-checkers records the project's lint and test commands, and a bad write fails project-checks with feedback",
++    async () => {
++      const dir = project();
++      cpSync(join(REPO_ROOT, "tests", "fixtures", "checkers-app"), dir, { recursive: true });
++      // Discovery runs before any workflow exists, so no Stop-hook continuation pulls the conductor away.
++      const discovery = session(dir);
++      await discovery.start();
++      await discovery.prompt("/aidlc-checkers");
++      await discovery.close();
++      const config = join(dir, "aidlc", "spaces", DEFAULT_SPACE, "checkers.json");
++      expect(existsSync(config), "checkers.json was written").toBe(true);
++      const checkers = parseCheckers(readFileSync(config, "utf-8"));
++      const commands = checkers.map((checker) => checker.command.join(" "));
++      expect(commands.some((command) => command.includes("lint")), commands.join("\n")).toBe(true);
++      expect(
++        checkers.some((checker) => checker.parser === "exit-code" && /\btest\b|sum\.check/.test(checker.command.join(" "))),
++        commands.join("\n"),
++      ).toBe(true);
++
++      seededProject("build-and-test", dir);
++      const rpc = session(dir);
++      await rpc.start();
++      let wrote = false;
++      const outcome = await rpc.prompt(
++        "Use the write tool to create src/debug.ts containing exactly this line: " +
++          "export function debug(x: number): number { console.log(x); return x; }  Do not use any other tool, then stop.",
++        {
++          stopWhen: (frame) => {
++            if (frame.type === "tool_execution_end" && frame.toolName === "write") wrote = true;
++            return wrote && frame.type === "turn_end";
++          },
++        },
++      );
++      await rpc.close();
++      expect(outcome.toolCalls.find((call) => call.toolName === "write")?.isError).toBe(false);
++      const frames = JSON.stringify(outcome.frames);
++      expect(frames).toContain("project-checks: FAILED");
++      expect(frames).toContain("no-console");
++      expect(audit(dir)).toMatch(/\*\*Event\*\*: SENSOR_FAILED\n(?:\*\*[^\n]+\n)*\*\*Sensor ID\*\*: project-checks/);
++    },
++    20 * 60_000,
++  );
++
+   // No model involved: the harness's own rule tester evaluates the shipped files.
+   (LIVE && binaryReady() ? test : test.skip)("S19a: the shipped stream rules trigger on what they guard and nothing else", () => {
+     const rules = join(DIST, ".harness-aidlc", "host", "rules");
+diff --git a/tests/fixtures/checkers-app/package.json b/tests/fixtures/checkers-app/package.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..15af1c67c47390f1ea28ba012ee2f579e838348e
+--- /dev/null
++++ b/tests/fixtures/checkers-app/package.json
+@@ -0,0 +1,9 @@
++{
++  "name": "checkers-app",
++  "private": true,
++  "type": "module",
++  "scripts": {
++    "lint": "bun scripts/lint.ts",
++    "test": "bun test ./test/sum.check.ts"
++  }
++}
+diff --git a/tests/fixtures/checkers-app/scripts/lint.ts b/tests/fixtures/checkers-app/scripts/lint.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2ef5663d4c4f55289c2617dd9c170e9fcc8c4d64
+--- /dev/null
++++ b/tests/fixtures/checkers-app/scripts/lint.ts
+@@ -0,0 +1,20 @@
++// The project's linter: no console.log in src. `bun scripts/lint.ts [file...]`
++// checks the named files, or every src/*.ts file, and prints one
++// `file:line:col: error: message` line per finding; it exits 1 on findings.
++import { readdirSync, readFileSync } from "node:fs";
++import { join } from "node:path";
++
++const named = process.argv.slice(2);
++const files = named.length > 0 ? named : readdirSync("src").filter((name) => name.endsWith(".ts")).map((name) => join("src", name));
++let findings = 0;
++for (const file of files) {
++  readFileSync(file, "utf-8")
++    .split("\n")
++    .forEach((line, index) => {
++      const column = line.indexOf("console.log");
++      if (column < 0) return;
++      findings++;
++      console.log(`${file}:${index + 1}:${column + 1}: error: console.log is not allowed in src (no-console)`);
++    });
++}
++process.exit(findings > 0 ? 1 : 0);
+diff --git a/tests/fixtures/checkers-app/src/sum.ts b/tests/fixtures/checkers-app/src/sum.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..7372ed029df70ef0c77d20dbe602c68b8832baa9
+--- /dev/null
++++ b/tests/fixtures/checkers-app/src/sum.ts
+@@ -0,0 +1,3 @@
++export function sum(a: number, b: number): number {
++  return a + b;
++}
+diff --git a/tests/fixtures/checkers-app/test/sum.check.ts b/tests/fixtures/checkers-app/test/sum.check.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..adc54cc322f9addf883eef077eeab9ee3e36405b
+--- /dev/null
++++ b/tests/fixtures/checkers-app/test/sum.check.ts
+@@ -0,0 +1,6 @@
++import { expect, test } from "bun:test";
++import { sum } from "../src/sum.ts";
++
++test("sum adds", () => {
++  expect(sum(2, 3)).toBe(5);
++});
+diff --git a/tests/integration/t-sensor-project-checks.test.ts b/tests/integration/t-sensor-project-checks.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..b8b52c608f23e2aeb8eebc34b0d01b3a663bbd1a
+--- /dev/null
++++ b/tests/integration/t-sensor-project-checks.test.ts
+@@ -0,0 +1,212 @@
++// covers: tool:aidlc-sensor-project-checks, function:parseCheckers, function:parseCheckerOutput, function:runProjectChecks
++//
++// The project-checks sensor runs the checkers a project lists in
++// aidlc/spaces/<space>/checkers.json. In-process cases pin the config contract,
++// each parser and the run rules (matching, working directory, `{file}`,
++// project-local binaries, missing executables, timeouts); the fire cases spawn
++// the packaged dispatcher to show a finding reaches the audit and the detail file.
++
++import { afterAll, describe, expect, test } from "bun:test";
++import { spawnSync } from "node:child_process";
++import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import {
++  type ProjectChecker,
++  parseCheckerOutput,
++  parseCheckers,
++  runProjectChecks,
++} from "../../core/tools/aidlc-sensor-project-checks.ts";
++
++const REPO_ROOT = join(import.meta.dir, "..", "..");
++const SENSOR_TS = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-sensor.ts");
++const temps: string[] = [];
++afterAll(() => {
++  for (const dir of temps) rmSync(dir, { recursive: true, force: true });
++});
++
++function project(): string {
++  const dir = mkdtempSync(join(tmpdir(), "t-project-checks-"));
++  temps.push(dir);
++  mkdirSync(join(dir, "src"), { recursive: true });
++  writeFileSync(join(dir, "src", "a.ts"), "export const a: string = 1;\n");
++  return dir;
++}
++
++const checker = (overrides: Partial<ProjectChecker>): ProjectChecker => ({ label: "c", command: ["true"], parser: "generic", ...overrides });
++
++describe("checkers.json", () => {
++  test("a valid file parses, with the generic parser by default", () => {
++    expect(
++      parseCheckers(JSON.stringify({ schemaVersion: 1, checkers: [{ label: " lint ", command: ["eslint", "{file}"], matches: "src/**" }] })),
++    ).toEqual([{ label: "lint", command: ["eslint", "{file}"], matches: "src/**", parser: "generic" }]);
++  });
++
++  test.each([
++    [{ schemaVersion: 2, checkers: [] }, "schemaVersion must be 1"],
++    [{ schemaVersion: 1 }, "checkers must be an array"],
++    [{ schemaVersion: 1, checkers: [{ label: "x", command: "eslint ." }] }, "checkers[0].command must be a non-empty argv array"],
++    [{ schemaVersion: 1, checkers: [{ label: "x", command: [""] }] }, "checkers[0].command must be a non-empty argv array"],
++    [{ schemaVersion: 1, checkers: [{ label: "x", command: ["x"], parser: "tsc" }] }, "checkers[0].parser must be one of: eslint, ruff, generic, exit-code"],
++    [{ schemaVersion: 1, checkers: [{ label: "x", command: ["x"], timeoutSeconds: 0 }] }, "checkers[0].timeoutSeconds must be a positive number"],
++    [{ schemaVersion: 1, checkers: [{ command: ["x"] }] }, "checkers[0].label must be a non-empty string"],
++  ])("%j is refused: %s", (config, message) => {
++    expect(() => parseCheckers(JSON.stringify(config))).toThrow(message);
++  });
++});
++
++describe("parsers", () => {
++  const dir = "/work/p";
++
++  test("eslint: errors fail, warnings are listed, absolute paths become project-relative", () => {
++    const stdout = `pnpm banner\n${JSON.stringify([
++      {
++        filePath: "/work/p/src/a.ts",
++        messages: [
++          { ruleId: "no-undef", severity: 2, message: "x is not defined", line: 3, column: 5 },
++          { ruleId: "prefer-const", severity: 1, message: "use const", line: 4, column: 1 },
++        ],
++      },
++    ])}`;
++    expect(parseCheckerOutput(checker({ label: "eslint", parser: "eslint" }), { status: 1, stdout, stderr: "" }, dir, dir)).toEqual([
++      { checker: "eslint", file: "src/a.ts", line: 3, column: 5, rule: "no-undef", severity: "error", message: "x is not defined" },
++      { checker: "eslint", file: "src/a.ts", line: 4, column: 1, rule: "prefer-const", severity: "warning", message: "use const" },
++    ]);
++  });
++
++  test("ruff: every finding is an error, relative to the checker's directory", () => {
++    const stdout = JSON.stringify([{ filename: "app.py", code: "F401", message: "unused import", location: { row: 1, column: 8 } }]);
++    expect(parseCheckerOutput(checker({ label: "ruff", parser: "ruff" }), { status: 1, stdout, stderr: "" }, dir, `${dir}/svc`)).toEqual([
++      { checker: "ruff", file: "svc/app.py", line: 1, column: 8, rule: "F401", severity: "error", message: "unused import" },
++    ]);
++  });
++
++  test("generic: tsc and gcc-style lines on either stream; notes are warnings", () => {
++    const result = {
++      status: 2,
++      stdout: "src/a.ts(1,14): error TS2322: Type 'number' is not assignable to type 'string'.\nFound 1 error.\n",
++      stderr: "lib/b.c:7:2: note: declared here\nlib/b.c:9:1: unused value\n",
++    };
++    expect(parseCheckerOutput(checker({ label: "tsc" }), result, dir, dir)).toEqual([
++      { checker: "tsc", file: "src/a.ts", line: 1, column: 14, rule: "TS2322", severity: "error", message: "Type 'number' is not assignable to type 'string'." },
++      { checker: "tsc", file: "lib/b.c", line: 7, column: 2, rule: "", severity: "warning", message: "declared here" },
++      { checker: "tsc", file: "lib/b.c", line: 9, column: 1, rule: "", severity: "error", message: "unused value" },
++    ]);
++  });
++
++  test("a failing run whose output no parser reads is a finding, never a clean pass", () => {
++    for (const parser of ["eslint", "ruff", "generic"] as const) {
++      expect(parseCheckerOutput(checker({ label: "x", parser }), { status: 2, stdout: "", stderr: "Oops: config not found" }, dir, dir)).toEqual([
++        { checker: "x", file: "", line: 0, column: 0, rule: "exit-2", severity: "error", message: "Oops: config not found" },
++      ]);
++    }
++    expect(parseCheckerOutput(checker({ parser: "generic" }), { status: 0, stdout: "all good", stderr: "" }, dir, dir)).toEqual([]);
++  });
++
++  test("exit-code: the exit status decides, and a failure carries the output's last lines", () => {
++    const lines = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join("\n");
++    expect(parseCheckerOutput(checker({ parser: "exit-code" }), { status: 0, stdout: lines, stderr: "" }, dir, dir)).toEqual([]);
++    const [finding] = parseCheckerOutput(checker({ label: "tests", parser: "exit-code" }), { status: 1, stdout: lines, stderr: "" }, dir, dir);
++    expect(finding.rule).toBe("exit-1");
++    expect(finding.message.split("\n")).toEqual(Array.from({ length: 30 }, (_, i) => `line ${i + 11}`));
++  });
++});
++
++describe("running checkers", () => {
++  test("only matching checkers run; none matching means nothing to report", () => {
++    const dir = project();
++    expect(runProjectChecks(dir, [checker({ matches: "**/*.py" })], join(dir, "src", "a.ts"))).toBeNull();
++  });
++
++  test("{file} is relative to the checker's directory, which also supplies node_modules/.bin", () => {
++    const dir = project();
++    mkdirSync(join(dir, "pkg", "src"), { recursive: true });
++    mkdirSync(join(dir, "pkg", "node_modules", ".bin"), { recursive: true });
++    writeFileSync(join(dir, "pkg", "src", "b.ts"), "x\n");
++    const lint = join(dir, "pkg", "node_modules", ".bin", "fakelint");
++    writeFileSync(lint, '#!/bin/sh\necho "$1:2:3: error: no semicolon"\nexit 1\n');
++    chmodSync(lint, 0o755);
++    const result = runProjectChecks(dir, [checker({ label: "fakelint", cwd: "pkg", command: ["fakelint", "{file}"] })], join(dir, "pkg", "src", "b.ts"));
++    expect(result).toEqual({
++      pass: false,
++      findings_count: 1,
++      checkers: [{ label: "fakelint", status: "fail" }],
++      violations: [{ checker: "fakelint", file: "pkg/src/b.ts", line: 2, column: 3, rule: "", severity: "error", message: "no semicolon" }],
++    });
++  });
++
++  test("a missing executable, an escaping cwd and a timeout are reported without failing the fire", () => {
++    const dir = project();
++    const result = runProjectChecks(
++      dir,
++      [
++        checker({ label: "absent", command: ["no-such-checker-binary", "{file}"] }),
++        checker({ label: "outside", cwd: "..", command: ["true"] }),
++        checker({ label: "slow", command: ["sleep", "5"], timeoutSeconds: 0.5, parser: "exit-code" }),
++      ],
++      join(dir, "src", "a.ts"),
++    );
++    expect(result).toEqual({
++      pass: true,
++      findings_count: 0,
++      checkers: [
++        { label: "absent", status: "skipped", note: "executable not found: no-such-checker-binary" },
++        { label: "outside", status: "skipped", note: "cwd escapes the project: .." },
++        { label: "slow", status: "timeout", note: "no result within 1s" },
++      ],
++      violations: [],
++    });
++  });
++
++  test("checkers share one time budget", () => {
++    const dir = project();
++    const result = runProjectChecks(
++      dir,
++      [checker({ label: "first", command: ["sleep", "1.2"], parser: "exit-code" }), checker({ label: "second", command: ["true"] })],
++      join(dir, "src", "a.ts"),
++      1_500,
++    );
++    expect(result?.checkers).toEqual([
++      { label: "first", status: "pass" },
++      { label: "second", status: "skipped", note: "sensor time budget spent" },
++    ]);
++  });
++});
++
++describe("fired through the dispatcher", () => {
++  const fire = (dir: string) =>
++    spawnSync(process.execPath, [SENSOR_TS, "fire", "project-checks", "--stage", "code-generation", "--output-path", join(dir, "src", "a.ts")], {
++      encoding: "utf-8",
++      env: { ...process.env, CLAUDE_PROJECT_DIR: dir, AIDLC_PROJECT_DIR: dir },
++    });
++  const audit = (dir: string): string => {
++    const shards = join(dir, "aidlc", "spaces", "default", "intents", "audit");
++    return existsSync(shards) ? readdirSync(shards).map((name) => readFileSync(join(shards, name), "utf-8")).join("\n") : "";
++  };
++
++  test("a finding fails the fire and the detail file names it", () => {
++    const dir = project();
++    mkdirSync(join(dir, "aidlc", "spaces", "default"), { recursive: true });
++    writeFileSync(
++      join(dir, "aidlc", "spaces", "default", "checkers.json"),
++      JSON.stringify({
++        schemaVersion: 1,
++        checkers: [{ label: "tsc", command: ["sh", "-c", 'echo "$0(1,14): error TS2322: Type number is not string."; exit 2', "{file}"], parser: "generic" }],
++      }),
++    );
++    const result = fire(dir);
++    expect(result.status, result.stderr).toBe(0);
++    const verdict = JSON.parse(result.stdout) as { result: string; detail_path: string };
++    expect(verdict.result).toBe("failed");
++    expect(audit(dir)).toContain("**Event**: SENSOR_FAILED");
++    const detail = readFileSync(join(dir, verdict.detail_path), "utf-8");
++    expect(detail).toContain('"file": "src/a.ts"');
++    expect(detail).toContain('"rule": "TS2322"');
++  });
++
++  test("without checkers.json the fire passes as tool-unavailable", () => {
++    const dir = project();
++    const result = fire(dir);
++    expect(JSON.parse(result.stdout)).toMatchObject({ result: "passed", note: "tool-unavailable" });
++  });
++});
+diff --git a/tests/integration/t93.test.ts b/tests/integration/t93.test.ts
+index d7d73916f54a3ac5e82585d3753f710661bf590f..c1c2a158cffff37ab763d7486e17778482fa32e2 100644
+--- a/tests/integration/t93.test.ts
++++ b/tests/integration/t93.test.ts
+@@ -101,6 +101,7 @@ function listRows(out: string): string[][] {
+ const EXPECTED_IDS = [
+   "claim-sources",
+   "linter",
++  "project-checks",
+   "required-sections",
+   "traceability",
+   "type-check",
+@@ -112,10 +113,10 @@ const EXPECTED_IDS = [
+ // ============================================================
+ 
+ describe("t93 aidlc-sensor list (extended from t93-sensor-list-describe.sh, plan 13)", () => {
+-  test("1: list emits exactly 6 framework sensors", () => {
++  test("1: list emits exactly 7 framework sensors", () => {
+     const r = sensor("list");
+     expect(r.status).toBe(0); // STRONGER: .sh discarded $? on list; we pin clean exit
+-    expect(listRows(r.out)).toHaveLength(6);
++    expect(listRows(r.out)).toHaveLength(7);
+   });
+ 
+   test("2: list column 2 is 'deterministic' for every row", () => {
+@@ -133,7 +134,7 @@ describe("t93 aidlc-sensor list (extended from t93-sensor-list-describe.sh, plan
+     expect(ids).toEqual([...ids].sort());
+   });
+ 
+-  test("4: list returns exactly the 6 framework sensor ids", () => {
++  test("4: list returns exactly the 7 framework sensor ids", () => {
+     const r = sensor("list");
+     const ids = listRows(r.out).map((cols) => cols[0]);
+     // .sh sentinel set — flags drift if a sensor is renamed/added/removed.
+diff --git a/tests/integration/t95-sensor-fire-hook-feature.test.ts b/tests/integration/t95-sensor-fire-hook-feature.test.ts
+index a09410a729110dc4622277b2c877275aae5ee1bb..9779214bdd1cbddb4c88a92934ac5777d3831d71 100644
+--- a/tests/integration/t95-sensor-fire-hook-feature.test.ts
++++ b/tests/integration/t95-sensor-fire-hook-feature.test.ts
+@@ -467,7 +467,7 @@ describe("t95 sensor-fire hook — multi-glob filtering at the stage level (mech
+     seedActiveDirective(proj, "code-generation", "alpha");
+     runHook(proj, join(proj, "src", "foo.ts"));
+     const argvs = spawnArgvs(proj);
+-    expect(argvs.length).toBe(2);
++    expect(argvs.map((argv) => argv[3])).toEqual(["linter", "type-check", "project-checks"]);
+     for (const argv of argvs) {
+       const stageFlag = argv.indexOf("--stage");
+       expect(stageFlag).toBeGreaterThan(-1);
+diff --git a/tests/unit/gen-coverage-registry.test.ts b/tests/unit/gen-coverage-registry.test.ts
+index da7db72f146e8b034eea9050c1da5a08563a3b51..62b84d975d88301c36492a795ad7bbfcc693e267 100644
+--- a/tests/unit/gen-coverage-registry.test.ts
++++ b/tests/unit/gen-coverage-registry.test.ts
+@@ -1206,6 +1206,8 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
+     "unit/t-harness-hook-contracts.test.ts",
+     "e2e/t-rpc-harness-live.serial.test.ts",
+     "e2e/t-harness-coexistence-live.serial.test.ts",
++    // The project-checks sensor test fires the packaged dispatcher.
++    "integration/t-sensor-project-checks.test.ts",
+     // t-ide-kiro constructs its approval-gate fixture by spawning the real
+     // shipped tools (runSetupTool), so its body is a deterministic spawner
+     // even though its filename segment carries no mechanism.
+diff --git a/tests/unit/t-harness-emit.test.ts b/tests/unit/t-harness-emit.test.ts
+index 4a17fb3d85ea80e543e978aeb68602b8007d774e..d1f72a25ba3c24d367d1f023917978d7850d06b1 100644
+--- a/tests/unit/t-harness-emit.test.ts
++++ b/tests/unit/t-harness-emit.test.ts
+@@ -132,6 +132,18 @@ describe("adapter and bootstrap", () => {
+       );
+     }
+   });
++
++  test("both trees ship the /aidlc and /aidlc-checkers prompts with the tree's invocation", () => {
++    const invoke = { dist: `bun ${ENGINE}/tools/aidlc.ts`, release: "aidlc" };
++    for (const [name, tree] of Object.entries(TREES) as Array<[keyof typeof TREES, string]>) {
++      const prompts = join(tree, ENGINE, "host", "prompts");
++      expect(readdirSync(prompts).sort()).toEqual(["aidlc-checkers.md", "aidlc.md"]);
++      const checkers = readFileSync(join(prompts, "aidlc-checkers.md"), "utf-8");
++      expect(frontmatter(checkers).description).toBeDefined();
++      expect(checkers).toContain(`\`${invoke[name]} engine sensor-project-checks --stage code-generation --file-path <file>\``);
++      expect(checkers).not.toContain("{{");
++    }
++  });
+ });
+ 
+ describe("orchestrator skill", () => {
+diff --git a/tests/unit/t227-tool-entrypoint-exports.test.ts b/tests/unit/t227-tool-entrypoint-exports.test.ts
+index 6e652653aef49c397d6c6f3b3215e59fb60f73df..53f256d920bb55f8397169816f847d586b74dd5b 100644
+--- a/tests/unit/t227-tool-entrypoint-exports.test.ts
++++ b/tests/unit/t227-tool-entrypoint-exports.test.ts
+@@ -42,6 +42,7 @@ const TOOL_FILES = [
+   "aidlc-runtime.ts",
+   "aidlc-sensor-claim-sources.ts",
+   "aidlc-sensor-linter.ts",
++  "aidlc-sensor-project-checks.ts",
+   "aidlc-sensor-type-check.ts",
+   "aidlc-state.ts",
+   "aidlc-utility.ts",
+diff --git a/tests/unit/t230-dispatcher-routes.test.ts b/tests/unit/t230-dispatcher-routes.test.ts
+index a00f9d3847e66061604a21dcb4056c6591c92baa..15e578524a4eff9ae8f004b8fa0d1c1f81c3f95c 100644
+--- a/tests/unit/t230-dispatcher-routes.test.ts
++++ b/tests/unit/t230-dispatcher-routes.test.ts
+@@ -2236,6 +2236,7 @@ describe("t230 dispatcher route completeness", () => {
+     for (const file of [
+       "aidlc-claim-sources.md",
+       "aidlc-linter.md",
++      "aidlc-project-checks.md",
+       "aidlc-required-sections.md",
+       "aidlc-traceability.md",
+       "aidlc-type-check.md",
+@@ -2269,6 +2270,7 @@ describe("t230 dispatcher route completeness", () => {
+       "aidlc-runtime.ts",
+       "aidlc-sensor-claim-sources.ts",
+       "aidlc-sensor-linter.ts",
++      "aidlc-sensor-project-checks.ts",
+       "aidlc-sensor-type-check.ts",
+       "aidlc-state.ts",
+       "aidlc-utility.ts",

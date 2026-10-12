@@ -1,0 +1,409 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 05:42:01 +0100
+Subject: [PATCH 13/17] feat(harness): AI-DLC contracts as stream-time rules
+ (A3)
+
+---
+ docs/guide/harnesses/coding-harness.md        | 24 ++++++
+ harness/harness/host/adapter.ts               | 73 ++++++++++++++++++-
+ harness/harness/host/rules/aidlc-evidence.md  | 15 ++++
+ harness/harness/host/rules/aidlc-no-stubs.md  | 18 +++++
+ .../host/rules/aidlc-reviewer-readonly.md     | 16 ++++
+ .../harness/host/rules/aidlc-state-files.md   | 18 +++++
+ tests/e2e/t-rpc-harness-live.serial.test.ts   | 52 +++++++++++++
+ tests/unit/t-harness-adapter-map.test.ts      | 38 +++++++++-
+ tests/unit/t-harness-emit.test.ts             | 19 +++++
+ 9 files changed, 268 insertions(+), 5 deletions(-)
+ create mode 100644 harness/harness/host/rules/aidlc-evidence.md
+ create mode 100644 harness/harness/host/rules/aidlc-no-stubs.md
+ create mode 100644 harness/harness/host/rules/aidlc-reviewer-readonly.md
+ create mode 100644 harness/harness/host/rules/aidlc-state-files.md
+
+diff --git a/docs/guide/harnesses/coding-harness.md b/docs/guide/harnesses/coding-harness.md
+index da9753d8a836d1ad70aac63b1270fd2e238722b4..c4907c7cea106ef311f8737545fb8fbab874a365 100644
+--- a/docs/guide/harnesses/coding-harness.md
++++ b/docs/guide/harnesses/coding-harness.md
+@@ -155,6 +155,30 @@ The advisor runs on Coding Harness's `advisor` model role; point that role at
+ another vendor to combine this with cross-vendor review. `task.agentAdvisor`
+ turns it off or picks a model per agent.
+ 
++### Stream-time rules
++
++The adapter registers `.harness-aidlc/host/rules/` with Coding Harness's rule
++engine, which matches a tool call while the model is still streaming it. A rule
++with `interruptMode: tool-only` stops the call before it runs; `always` also
++stops prose; `never` lets the call through and injects the reminder afterwards.
++
++| Rule | Guards | When it fires | Mode |
++|---|---|---|---|
++| `aidlc-no-stubs` | the definition of done | a code write throws `not implemented`, or contains `TODO: implement`, `raise NotImplementedError`, `unimplemented!()` or `todo!()` | `tool-only` |
++| `aidlc-state-files` | state discipline | any write or edit to `aidlc-state.md`, the intent registry, the active-intent pointer or an audit shard | `always` |
++| `aidlc-reviewer-readonly` | reviewer independence | a reviewer, product lead or compliance agent writes a code file | `always` |
++| `aidlc-evidence` | evidence before claims | the main agent or developer says work is done without citing a command it ran (judged by a small model) | `prose-only` |
++
++The adapter also derives a rule from the project's method. When a memory file
++the space includes has a line that rules out mocks (for example `Do not mock the
++database`), it writes `aidlc/.aidlc-sessions/harness/rules/aidlc-no-mocks.md`,
++which quotes that line whenever a test file calls `jest.mock`, `vi.mock`,
++`mock.module`, `mock.patch` or `MagicMock`. The rule only reminds
++(`interruptMode: never`) because a practice may allow some mocks. Remove the
++line from the method and the rule goes with it at the next session start.
++
++Try a rule offline with `harness ttsr test --rule <file> --source tool --tool write --path <path> -- '<snippet>'`.
++
+ ## Alongside Claude Code
+ 
+ One project can carry both distributions: run `aidlc config --harness claude`
+diff --git a/harness/harness/host/adapter.ts b/harness/harness/host/adapter.ts
+index d72db8674c4b487cfa3847089af26d4cfb577903..397383bf860664cf82b7fcd2cc77f5efa943a2d3 100644
+--- a/harness/harness/host/adapter.ts
++++ b/harness/harness/host/adapter.ts
+@@ -37,7 +37,7 @@
+ 
+ import { spawn } from "node:child_process";
+ import { createHash } from "node:crypto";
+-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
++import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+ import { homedir } from "node:os";
+ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+ 
+@@ -717,6 +717,71 @@ export function buildConstitution(cwd: string): string | null {
+   ].join("\n");
+ }
+ 
++// ---------------------------------------------------------------------------
++// Stream rules derived from the method (host/rules carries the static contracts).
++// ---------------------------------------------------------------------------
++
++const NO_MOCKS_PRACTICE = /\b(?:no|never|don't|do not|avoid|without)\b[^\n]{0,80}\bmock/i;
++export const DERIVED_RULES_DIR = join("aidlc", ".aidlc-sessions", "harness", "rules");
++
++/** The active space's method lines that rule out mocks, labelled with their file. */
++export function noMockPractices(cwd: string): string[] {
++  const includes = readIncludes(cwd);
++  if (!includes) return [];
++  const practices: string[] = [];
++  for (const file of includes.files) {
++    for (const line of (readText(join(cwd, includes.memory, file)) ?? "").split("\n")) {
++      const text = line.replace(/<!--[\s\S]*?-->/g, "").replace(/^\s*[-*]\s+/, "").trim();
++      if (text && !text.startsWith("#") && NO_MOCKS_PRACTICE.test(text)) practices.push(`${includes.memory}/${file}: ${text}`);
++    }
++  }
++  return practices;
++}
++
++function noMocksRule(practices: string[]): string {
++  const tests = ["*.test.ts", "*.test.tsx", "*.test.js", "*.test.jsx", "*.spec.ts", "*.spec.tsx", "*.spec.js", "*.spec.jsx", "test_*.py", "*_test.py"];
++  return [
++    "---",
++    'description: "AI-DLC: the method says not to mock; tests use the real collaborator"',
++    "astCondition:",
++    ...["jest.mock($$$)", "vi.mock($$$)", "mock.module($$$)", "mock.patch($$$)", "mock.patch.object($$$)", "unittest.mock.patch($$$)", "MagicMock($$$)"].map(
++      (pattern) => `  - "${pattern}"`,
++    ),
++    `scope: "${tests.flatMap((glob) => [`tool:edit(${glob})`, `tool:write(${glob})`]).join(", ")}"`,
++    // A reminder after the write, not a refusal: a practice may allow some mocks.
++    "interruptMode: never",
++    "---",
++    "",
++    "This test mocks a collaborator, and the project's AI-DLC method says:",
++    "",
++    ...practices.map((practice) => `- ${practice}`),
++    "",
++    "Test against the real collaborator, or keep the mock only where the practice above allows it and say why.",
++    "",
++  ].join("\n");
++}
++
++/** Write (or remove) the rules derived from the method; the directory when it holds one. */
++export function writeDerivedRules(cwd: string): string | null {
++  const dir = join(cwd, DERIVED_RULES_DIR);
++  const file = join(dir, "aidlc-no-mocks.md");
++  const practices = noMockPractices(cwd);
++  try {
++    if (practices.length === 0) {
++      rmSync(file, { force: true });
++      return null;
++    }
++    const text = noMocksRule(practices);
++    if (readText(file) !== text) {
++      mkdirSync(dir, { recursive: true });
++      writeFileSync(file, text);
++    }
++    return dir;
++  } catch {
++    return null;
++  }
++}
++
+ // ---------------------------------------------------------------------------
+ // Sensor feedback (model-visible; audit rows are untouched).
+ // ---------------------------------------------------------------------------
+@@ -870,13 +935,15 @@ export default function aidlcHarnessAdapter(pi: HarnessExtensionApi, options: Ad
+   };
+ 
+   pi.on("resources_discover", (event, ctx) => {
++    const cwd = typeof event.cwd === "string" ? event.cwd : ctx.cwd;
+     // Subagent sessions rerun discovery, so an advisor sees the approvals as of its spawn.
+-    const context = writeWatchdogContext(typeof event.cwd === "string" ? event.cwd : ctx.cwd);
++    const context = writeWatchdogContext(cwd);
++    const derivedRules = writeDerivedRules(cwd);
+     return {
+       skillPaths: [`${UNPROJECTED_ENGINE_DIR}/skills`],
+       promptPaths: [`${UNPROJECTED_ENGINE_DIR}/host/prompts`],
+       agentPaths: [`${UNPROJECTED_ENGINE_DIR}/host/agents`],
+-      rulePaths: [`${UNPROJECTED_ENGINE_DIR}/host/rules`],
++      rulePaths: [`${UNPROJECTED_ENGINE_DIR}/host/rules`, ...(derivedRules ? [derivedRules] : [])],
+       watchdogPaths: [`${UNPROJECTED_ENGINE_DIR}/host/watchdog/WATCHDOG.md`, ...(context ? [context] : [])],
+     };
+   });
+diff --git a/harness/harness/host/rules/aidlc-evidence.md b/harness/harness/host/rules/aidlc-evidence.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..d1d6e21e91855f367d2f444c5c5f32bc3be1c828
+--- /dev/null
++++ b/harness/harness/host/rules/aidlc-evidence.md
+@@ -0,0 +1,15 @@
++---
++description: "AI-DLC: a claim that tests or checks pass rests on a run shown in this turn"
++question: "Does the text claim that tests or checks passed without a tool result in this turn showing that run?"
++scope: text
++agents: "main, aidlc-developer-agent"
++interruptMode: prose-only
++---
++
++AI-DLC gates record what was verified. A pass claimed without a run in this turn
++puts an unverified statement in front of the human at the approval gate.
++
++Run the check and cite its output, or say plainly that it was not run and why.
++
++Contract: the build-and-test stage records verification evidence from actual
++runs.
+diff --git a/harness/harness/host/rules/aidlc-no-stubs.md b/harness/harness/host/rules/aidlc-no-stubs.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..f33ecaccc989c5acad7111f52f0118238b1558e6
+--- /dev/null
++++ b/harness/harness/host/rules/aidlc-no-stubs.md
+@@ -0,0 +1,18 @@
++---
++description: "AI-DLC construction: generated code implements the approved plan, never a stub or placeholder"
++condition: "(?i)throw new (?:Error|NotImplementedError)\\(\\s*[\"'`](?:not (?:yet )?implemented|todo)|TODO: implement|raise NotImplementedError|unimplemented!\\(|todo!\\("
++scope: "tool:edit(*.ts), tool:write(*.ts), tool:edit(*.tsx), tool:write(*.tsx), tool:edit(*.js), tool:write(*.js), tool:edit(*.jsx), tool:write(*.jsx), tool:edit(*.mjs), tool:write(*.mjs), tool:edit(*.cjs), tool:write(*.cjs), tool:edit(*.py), tool:write(*.py), tool:edit(*.go), tool:write(*.go), tool:edit(*.rs), tool:write(*.rs), tool:edit(*.java), tool:write(*.java), tool:edit(*.kt), tool:write(*.kt), tool:edit(*.cs), tool:write(*.cs), tool:edit(*.rb), tool:write(*.rb), tool:edit(*.swift), tool:write(*.swift), tool:edit(*.php), tool:write(*.php)"
++interruptMode: tool-only
++---
++
++AI-DLC code generation implements the behaviour the human-approved plan
++describes. A `not implemented` throw, a `TODO: implement` placeholder or a stub
++body ships the plan unfinished while the stage reports it done, and Build and
++Test then verifies a placeholder.
++
++Write the real implementation. If a piece cannot be built yet, stop and say
++which plan step is blocked and why, so the gap goes back to the plan instead of
++into the code.
++
++Contract: the construction stage protocol completes every approved plan step
++before the stage reports done.
+diff --git a/harness/harness/host/rules/aidlc-reviewer-readonly.md b/harness/harness/host/rules/aidlc-reviewer-readonly.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..4c5373acd0a7f47e3699f21180cbee39a6833abc
+--- /dev/null
++++ b/harness/harness/host/rules/aidlc-reviewer-readonly.md
+@@ -0,0 +1,16 @@
++---
++description: "AI-DLC reviewers report findings in their review; they never change code"
++condition: ".*"
++scope: "tool:edit(*.ts), tool:write(*.ts), tool:edit(*.tsx), tool:write(*.tsx), tool:edit(*.js), tool:write(*.js), tool:edit(*.jsx), tool:write(*.jsx), tool:edit(*.mjs), tool:write(*.mjs), tool:edit(*.cjs), tool:write(*.cjs), tool:edit(*.py), tool:write(*.py), tool:edit(*.go), tool:write(*.go), tool:edit(*.rs), tool:write(*.rs), tool:edit(*.java), tool:write(*.java), tool:edit(*.kt), tool:write(*.kt), tool:edit(*.cs), tool:write(*.cs), tool:edit(*.rb), tool:write(*.rb), tool:edit(*.swift), tool:write(*.swift), tool:edit(*.php), tool:write(*.php)"
++agents: "aidlc-*-reviewer-agent, aidlc-product-lead-agent, aidlc-compliance-agent"
++interruptMode: always
++---
++
++A reviewer writes exactly one file: its review, at the `reviewFile` path the
++dispatch gave it. A fix made by the reviewer is unreviewed work that the
++builder, the plan and the gate never see.
++
++Put the finding in the review with the file, the line and the change you would
++make. The builder makes it after the conductor routes the verdict.
++
++Contract: the reviewer protocol (§12a) — the reviewer writes only its review.
+diff --git a/harness/harness/host/rules/aidlc-state-files.md b/harness/harness/host/rules/aidlc-state-files.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..f43fd426eb6ecc7f831e5d43d2ce3e54cea48b1e
+--- /dev/null
++++ b/harness/harness/host/rules/aidlc-state-files.md
+@@ -0,0 +1,18 @@
++---
++description: "AI-DLC workflow state changes go through the engine, never through its files"
++condition: ".*"
++scope: "tool:edit(**/aidlc-state.md), tool:write(**/aidlc-state.md), tool:edit(**/intents.json), tool:write(**/intents.json), tool:edit(**/active-intent), tool:write(**/active-intent), tool:edit(**/audit/*.md), tool:write(**/audit/*.md)"
++interruptMode: always
++---
++
++`aidlc-state.md`, the intent registry, the active-intent pointer and the audit
++shards belong to the AI-DLC engine. It changes them under a lock, checks every
++transition against the stage graph and the human's approvals, and writes the
++audit row that records it. An edit made by hand skips all of that.
++
++Run the engine command the current directive names instead, such as the stage
++report or the audit log command. If no command fits, stop and tell the human
++what you were trying to change.
++
++Contract: the orchestrator skill's state discipline — workflow state is changed
++only by the engine's typed commands.
+diff --git a/tests/e2e/t-rpc-harness-live.serial.test.ts b/tests/e2e/t-rpc-harness-live.serial.test.ts
+index 6f92a47600f50a0a60ab687a4577a1c7c7b7baa4..336bc961bcd68e30ba27f4e933efc1b4fbca3e1b 100644
+--- a/tests/e2e/t-rpc-harness-live.serial.test.ts
++++ b/tests/e2e/t-rpc-harness-live.serial.test.ts
+@@ -331,6 +331,58 @@ describe("t-rpc-harness-live", () => {
+     10 * 60_000,
+   );
+ 
++  // No model involved: the harness's own rule tester evaluates the shipped files.
++  (LIVE && binaryReady() ? test : test.skip)("S19a: the shipped stream rules trigger on what they guard and nothing else", () => {
++    const rules = join(DIST, ".harness-aidlc", "host", "rules");
++    const triggered = (rule: string, path: string, snippet: string, agent = "main"): boolean => {
++      const result = spawnSync(
++        BIN,
++        ["ttsr", "test", "--rule", join(rules, rule), "--source", "tool", "--tool", "write", "--path", path, "--agent", agent, "--json", "--", snippet],
++        { encoding: "utf-8" },
++      );
++      const report = JSON.parse(result.stdout) as { triggered?: unknown[]; error?: string };
++      // A rule scoped to other agents does not apply to this one.
++      if (report.error?.includes("does not apply to agent")) return false;
++      if (!report.triggered) throw new Error(result.stdout + result.stderr);
++      return report.triggered.length > 0;
++    };
++    const stub = 'export function f(): number { throw new Error("not implemented"); }';
++    expect(triggered("aidlc-no-stubs.md", "src/a.ts", stub)).toBe(true);
++    expect(triggered("aidlc-no-stubs.md", "src/a.ts", "export const f = (a: number) => a * 2;")).toBe(false);
++    expect(triggered("aidlc-no-stubs.md", "README.md", stub)).toBe(false);
++    const record = "aidlc/spaces/default/intents/x";
++    expect(triggered("aidlc-state-files.md", `${record}/aidlc-state.md`, "- [x] code-generation")).toBe(true);
++    expect(triggered("aidlc-state-files.md", `${record}/inception/requirements-analysis/requirements.md`, "# R")).toBe(false);
++    expect(triggered("aidlc-reviewer-readonly.md", "src/a.ts", "x", "aidlc-architecture-reviewer-agent")).toBe(true);
++    expect(triggered("aidlc-reviewer-readonly.md", `${record}/reviews/r.md`, "x", "aidlc-architecture-reviewer-agent")).toBe(false);
++    expect(triggered("aidlc-reviewer-readonly.md", "src/a.ts", "x", "aidlc-developer-agent")).toBe(false);
++  });
++
++  live(
++    "S19: a stub write is interrupted before it reaches disk",
++    async () => {
++      const dir = project();
++      const rpc = session(dir);
++      await rpc.start();
++      await rpc.prompt(
++        "Use the write tool to create src/total.ts containing exactly this line and nothing else: " +
++          'export function total(): number { throw new Error("not implemented"); }  Then stop.',
++      );
++      const state = (await rpc.command({ type: "get_state" })).data as { sessionFile?: string };
++      await rpc.close();
++      const written = join(dir, "src", "total.ts");
++      expect(existsSync(written) ? readFileSync(written, "utf-8") : "").not.toContain("not implemented");
++      const injected = readFileSync(String(state.sessionFile), "utf-8")
++        .split("\n")
++        .filter(Boolean)
++        .map((line) => JSON.parse(line) as { type?: string; injectedRules?: string[] })
++        .filter((entry) => entry.type === "ttsr_injection")
++        .flatMap((entry) => entry.injectedRules ?? []);
++      expect(injected).toContain("aidlc-no-stubs");
++    },
++    10 * 60_000,
++  );
++
+   // A local Ollama model with tool support stands in for "another vendor".
+   (OLLAMA_REVIEWER ? live : test.skip)(
+     "S17: a reviewer subagent runs on a model family other than the builder's",
+diff --git a/tests/unit/t-harness-adapter-map.test.ts b/tests/unit/t-harness-adapter-map.test.ts
+index 1c3cc51116bf24ad911b0cf5112e2cb07703f7fe..ff6079c51a29b927eff567c26fbe20f057cde055 100644
+--- a/tests/unit/t-harness-adapter-map.test.ts
++++ b/tests/unit/t-harness-adapter-map.test.ts
+@@ -5,10 +5,10 @@
+ // batch dispatch, and what never reaches a hook (main-only events in subagents,
+ // chained framework shell commands).
+ //
+-// covers: function:claudeCalls, function:taskItems, function:withTaskAssignments, function:withoutRecommended, function:askHookFields, function:bashBoundaryViolation, function:realPath, function:parseSensorFeedback, function:formatSensorFeedback, function:activeTodo, function:reviewerRouting, function:readHarnessSettings, function:approvedArtifacts, function:writeWatchdogContext
++// covers: function:claudeCalls, function:taskItems, function:withTaskAssignments, function:withoutRecommended, function:askHookFields, function:bashBoundaryViolation, function:realPath, function:parseSensorFeedback, function:formatSensorFeedback, function:activeTodo, function:reviewerRouting, function:readHarnessSettings, function:approvedArtifacts, function:writeWatchdogContext, function:noMockPractices, function:writeDerivedRules
+ 
+ import { describe, expect, test } from "bun:test";
+-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
++import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+ import aidlcHarnessAdapter, {
+@@ -21,6 +21,7 @@ import aidlcHarnessAdapter, {
+   realPath,
+   reviewerRouting,
+   type CoreResult,
++  writeDerivedRules,
+   writeWatchdogContext,
+ } from "../../harness/harness/host/adapter.ts";
+ 
+@@ -310,6 +311,39 @@ describe("advisor context", () => {
+   });
+ });
+ 
++describe("derived stream rules", () => {
++  test("a method line against mocks yields a no-mocks rule quoting it, removed when the line goes", async () => {
++    const dir = mkdtempSync(join(tmpdir(), "t-harness-rules-"));
++    try {
++      const memory = join(dir, "aidlc", "spaces", "default", "memory");
++      mkdirSync(join(dir, ".harness-aidlc", "host"), { recursive: true });
++      mkdirSync(memory, { recursive: true });
++      writeFileSync(
++        join(dir, ".harness-aidlc", "host", "includes.json"),
++        JSON.stringify({ schemaVersion: 1, memory: "aidlc/spaces/default/memory", files: ["org.md", "project.md"] }),
++      );
++      writeFileSync(join(memory, "org.md"), "# Org\n\n## Mocking\n\n- Prefer fakes to hand-rolled stubs.\n");
++      expect(writeDerivedRules(dir)).toBeNull();
++
++      writeFileSync(join(memory, "project.md"), "## Testing Posture\n\n- Do not mock the database; use the test container. <!-- cid:x -->\n");
++      const rules = writeDerivedRules(dir);
++      expect(rules).toBe(join(dir, "aidlc", ".aidlc-sessions", "harness", "rules"));
++      const rule = readFileSync(join(String(rules), "aidlc-no-mocks.md"), "utf-8");
++      expect(rule).toContain("- aidlc/spaces/default/memory/project.md: Do not mock the database; use the test container.");
++      expect(rule).toContain("interruptMode: never");
++      const { emit } = load();
++      const resources = (await emit("resources_discover", { cwd: dir, reason: "startup" })) as { rulePaths: string[] };
++      expect(resources.rulePaths).toEqual([".harness-aidlc/host/rules", String(rules)]);
++
++      writeFileSync(join(memory, "project.md"), "## Testing Posture\n\n- Use the test container for the database.\n");
++      expect(writeDerivedRules(dir)).toBeNull();
++      expect(existsSync(join(String(rules), "aidlc-no-mocks.md"))).toBe(false);
++    } finally {
++      rmSync(dir, { recursive: true, force: true });
++    }
++  });
++});
++
+ describe("tool_result", () => {
+   test("an answered ask reaches record-human-turn with each question's own answer", async () => {
+     const { emit, calls } = load();
+diff --git a/tests/unit/t-harness-emit.test.ts b/tests/unit/t-harness-emit.test.ts
+index 1647d434cf7d30e5428d55b51bc87eabc68d069f..4a17fb3d85ea80e543e978aeb68602b8007d774e 100644
+--- a/tests/unit/t-harness-emit.test.ts
++++ b/tests/unit/t-harness-emit.test.ts
+@@ -66,6 +66,25 @@ describe("advisor guidance", () => {
+   });
+ });
+ 
++describe("stream rules", () => {
++  test("both trees ship the AI-DLC contract rules, each with a trigger and a scope", () => {
++    for (const tree of Object.values(TREES)) {
++      const dir = join(tree, ENGINE, "host", "rules");
++      expect(readdirSync(dir).sort()).toEqual([
++        "aidlc-evidence.md",
++        "aidlc-no-stubs.md",
++        "aidlc-reviewer-readonly.md",
++        "aidlc-state-files.md",
++      ]);
++      for (const name of readdirSync(dir)) {
++        const fields = frontmatter(readFileSync(join(dir, name), "utf-8"));
++        expect(fields.condition ?? fields.question, name).toBeDefined();
++        expect(fields.scope, name).toBeDefined();
++      }
++    }
++  });
++});
++
+ describe("method include", () => {
+   test("lists the Claude include stub's method files, all shipped", () => {
+     const stub = readFileSync(join(REPO_ROOT, "harness", "claude", "rules-aidlc.md"), "utf-8");

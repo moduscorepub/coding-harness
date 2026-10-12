@@ -1,0 +1,7 @@
+{
+  "id": "py-merge-unsorted",
+  "tags": ["bugfix", "py"],
+  "scope": "bugfix",
+  "request": "merge() in slots/intervals.py misses overlaps when its input is unsorted: merge([[5, 7], [1, 3], [2, 6]]) returns [[5, 7]] instead of [[1, 7]]; `python3 -m unittest tests/check_intervals.py` fails. Touching intervals such as [1, 2] and [2, 3] merge, and the caller's list must not change.",
+  "hidden": ["python3", "__hidden__/check_intervals.py"]
+}

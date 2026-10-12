@@ -1,0 +1,698 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 06:12:34 +0100
+Subject: [PATCH 14/17] feat(harness): state-anchored compaction (A4)
+
+---
+ docs/guide/harnesses/coding-harness.md      |  27 ++
+ harness/harness/host/adapter.ts             | 269 +++++++++++++++++++-
+ tests/e2e/t-rpc-harness-live.serial.test.ts |  79 +++++-
+ tests/unit/t-harness-adapter-map.test.ts    | 165 +++++++++++-
+ 4 files changed, 526 insertions(+), 14 deletions(-)
+
+diff --git a/docs/guide/harnesses/coding-harness.md b/docs/guide/harnesses/coding-harness.md
+index c4907c7cea106ef311f8737545fb8fbab874a365..7997f4cf177e347839d5d746a0893674f2f44179 100644
+--- a/docs/guide/harnesses/coding-harness.md
++++ b/docs/guide/harnesses/coding-harness.md
+@@ -179,6 +179,33 @@ line from the method and the rule goes with it at the next session start.
+ 
+ Try a rule offline with `harness ttsr test --rule <file> --source tool --tool write --path <path> -- '<snippet>'`.
+ 
++### Compaction from the workflow record
++
++When Coding Harness compacts a session with an active workflow, the adapter
++writes the summary instead of a model. It runs `validate-state` as Claude Code's
++PreCompact hook does, then builds the summary from the record on disk:
++
++- the human's last three messages from the part being compacted;
++- the position from `aidlc-state.md` (phase, current stage and its gate state);
++- the directive in flight and the command that re-issues it, since compaction
++  clears the parts already delivered;
++- the human-approved artifacts, open questions (empty `[Answer]:` tags) and the
++  last three human decisions from the audit log;
++- the files the compacted part of the session wrote or edited;
++- the engine's own post-compaction context (what Claude Code injects through
++  SessionStart `source=compact`).
++
++With no active workflow, an unreadable record, or focus text (`/compact <focus>`),
++the harness writes its usual summary.
++
++A turn that moves the workflow to another stage compacts once context use
++reaches 40%, so each stage starts with a summary rather than a full transcript.
++Set the threshold in `aidlc.settings.json`; `0` turns it off:
++
++```json
++{ "harness": { "schemaVersion": 1, "compactAtStageBoundary": 60 } }
++```
++
+ ## Alongside Claude Code
+ 
+ One project can carry both distributions: run `aidlc config --harness claude`
+diff --git a/harness/harness/host/adapter.ts b/harness/harness/host/adapter.ts
+index 397383bf860664cf82b7fcd2cc77f5efa943a2d3..141c28f45f53dfe5c56cb731c40e77cd6ba4810d 100644
+--- a/harness/harness/host/adapter.ts
++++ b/harness/harness/host/adapter.ts
+@@ -24,7 +24,8 @@
+ //   tool_result (every tool)               → fold-usage               (PostToolUse "")
+ //   tool_result task                       → log-subagent             (SubagentStop)
+ //   session_stop (main)                    → continue-workflow        (Stop)
+-//   session_before_compact (main)          → validate-state           (PreCompact)
++//   session_before_compact (main)          → validate-state           (PreCompact), then
++//                                            session-start source=compact into the summary (SessionStart)
+ //   session_shutdown (main)                → session-end              (SessionEnd)
+ //   turn_end / agent_end (main)            → statusline               (statusLine)
+ //
+@@ -32,8 +33,10 @@
+ // (set AIDLC_HARNESS_SENSOR_FEEDBACK=0 to turn that off; audit rows are
+ // unchanged either way), the AI-DLC method tree is injected into the system
+ // prompt from host/includes.json (the harness has no project include config),
+-// and reviewer subagents are routed to a model family other than the builder's
+-// (`before_subagent_spawn`; AI-DLC setting harness.reviewDiversity).
++// reviewer subagents are routed to a model family other than the builder's
++// (`before_subagent_spawn`; AI-DLC setting harness.reviewDiversity), the
++// compaction summary is built from the workflow record, and a turn that crosses
++// a stage boundary compacts once context use reaches harness.compactAtStageBoundary.
+ 
+ import { spawn } from "node:child_process";
+ import { createHash } from "node:crypto";
+@@ -66,6 +69,8 @@ const SENSOR_DETAIL_MAX_CHARS = 2_000;
+ const SENSOR_DETAIL_MAX_LINES = 30;
+ const CONSTITUTION_MAX_CHARS = 60_000;
+ const STATUSLINE_DEBOUNCE_MS = 1_000;
++// Context usage (percent) at which a stage boundary compacts; `harness.compactAtStageBoundary` overrides.
++const DEFAULT_COMPACT_AT_STAGE_BOUNDARY = 40;
+ // The ask tool appends this to answers its timeout selected (setting `ask.timeout`).
+ const ASK_TIMEOUT_MARKER = "(auto-selected after timeout)";
+ const ASK_TIMEOUT_CONTEXT =
+@@ -100,6 +105,7 @@ export type HarnessContext = {
+     notify?: (message: string, type?: "info" | "warning" | "error") => void;
+   };
+   getContextUsage?: () => { percent?: number | null; tokens?: number | null; contextWindow?: number } | undefined;
++  compact?: (instructionsOrOptions?: string | Record<string, unknown>) => Promise<void>;
+ };
+ 
+ type Handler = (event: Record<string, unknown>, ctx: HarnessContext) => unknown;
+@@ -212,6 +218,14 @@ function parseJson(text: string): Record<string, unknown> | null {
+   }
+ }
+ 
++/** The additional context a SessionStart-style hook printed, or null. */
++function hookContext(result: CoreResult): string | null {
++  const parsed = parseJson(result.stdout);
++  const hookOutput = parsed?.hookSpecificOutput as { additionalContext?: unknown } | undefined;
++  const context = hookOutput?.additionalContext ?? parsed?.additionalContext;
++  return typeof context === "string" && context.trim() ? context : null;
++}
++
+ // ---------------------------------------------------------------------------
+ // Session identity: Claude hooks always carry the MAIN session id and transcript,
+ // subagent tool calls add agent_type. A harness subagent transcript lives in its
+@@ -782,6 +796,204 @@ export function writeDerivedRules(cwd: string): string | null {
+   }
+ }
+ 
++// ---------------------------------------------------------------------------
++// State-anchored compaction: the summary is the workflow record, not a recollection.
++// ---------------------------------------------------------------------------
++
++const GATE_STATES: Record<string, string> = {
++  " ": "pending",
++  "-": "in progress",
++  "?": "awaiting approval",
++  R: "revising",
++  x: "completed",
++  S: "skipped",
++};
++// Audit events that record what the human decided, with the field that says what.
++const DECISION_FIELDS: Record<string, string[]> = {
++  GATE_APPROVED: ["User Input", "Details"],
++  GATE_REJECTED: ["Feedback", "Details"],
++  PLAN_APPROVAL_RECORDED: ["Details"],
++  QUESTION_ANSWERED: ["Details"],
++  SUMMARY_CONFIRMATION_RECORDED: ["Choice", "Details"],
++  RECOVERY_COMPLETED: ["Choice"],
++};
++const MAX_OPEN_QUESTIONS = 10;
++
++function stateField(state: string, name: string): string | null {
++  return new RegExp(`^- \\*\\*${name}\\*\\*:[ \\t]*(\\S[^\\n]*)$`, "m").exec(state)?.[1]?.trim() ?? null;
++}
++
++/** The current stage of the active intent, or null without a workflow. */
++export function currentStage(cwd: string): string | null {
++  const record = activeRecordDir(cwd);
++  return record ? stateField(readText(join(record, "aidlc-state.md")) ?? "", "Current Stage") : null;
++}
++
++function auditRows(record: string): Array<{ timestamp: string; event: string; fields: Record<string, string> }> {
++  const dir = join(record, "audit");
++  const rows: Array<{ timestamp: string; event: string; fields: Record<string, string> }> = [];
++  const shards = existsSync(dir) ? readdirSync(dir).filter(name => name.endsWith(".md")) : [];
++  for (const shard of shards) {
++    for (const block of (readText(join(dir, shard)) ?? "").split(/^---$/m)) {
++      const fields: Record<string, string> = {};
++      for (const match of block.matchAll(/^\*\*([^*\n]+)\*\*:[ \t]*([^\n]*)$/gm)) fields[match[1]] = match[2].trim();
++      if (fields.Event) rows.push({ timestamp: fields.Timestamp ?? "", event: fields.Event, fields });
++    }
++  }
++  // Shards are per clone; their rows interleave by time.
++  return rows.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
++}
++
++function openQuestions(cwd: string, record: string): string[] {
++  const open: string[] = [];
++  const walk = (dir: string): void => {
++    for (const entry of readdirSync(dir, { withFileTypes: true })) {
++      const full = join(dir, entry.name);
++      if (entry.isDirectory()) {
++        if (!entry.name.startsWith(".") && entry.name !== "audit") walk(full);
++        continue;
++      }
++      if (!entry.name.endsWith("-questions.md")) continue;
++      let heading = "";
++      for (const line of (readText(full) ?? "").replace(/<!--[\s\S]*?-->/g, "").split("\n")) {
++        const title = /^#{2,4}\s+(.+)$/.exec(line);
++        if (title) heading = title[1].trim();
++        else if (/^\[Answer\]:\s*$/.test(line)) open.push(`\`${relative(cwd, full)}\`${heading ? `: ${heading}` : ""}`);
++      }
++    }
++  };
++  walk(record);
++  return open.sort();
++}
++
++function directiveLine(record: string, nextCommand: string): string {
++  const marker = parseJson(readText(join(record, ".aidlc-engine", "active-directive.json")) ?? "");
++  const run = `To continue the workflow, run \`${nextCommand}\` and do what the directive it returns says.`;
++  if (!marker || typeof marker.kind !== "string") return `None. ${run}`;
++  const what = [
++    `\`${marker.kind}\``,
++    typeof marker.ask_type === "string" ? `(${marker.ask_type})` : "",
++    typeof marker.stage === "string" ? `for \`${marker.stage}\`` : "",
++    typeof marker.unit === "string" ? `unit \`${marker.unit}\`` : "",
++    typeof marker.part === "number" && typeof marker.parts === "number" ? `part ${marker.part} of ${marker.parts}` : "",
++  ]
++    .filter(Boolean)
++    .join(" ");
++  return `${what} was in flight; the compaction cleared the parts already delivered. ${run}`;
++}
++
++const HUMAN_MESSAGES = 3;
++const HUMAN_MESSAGE_CHARS = 600;
++
++/** The human's last messages before the first kept entry, oldest first, each cut to a few hundred characters. */
++export function humanMessages(branchEntries: unknown, firstKeptEntryId: string): string[] {
++  const out: string[] = [];
++  for (const entry of Array.isArray(branchEntries) ? branchEntries : []) {
++    const record = (entry ?? {}) as { id?: unknown; type?: unknown; message?: { role?: unknown; content?: unknown } };
++    if (record.id === firstKeptEntryId) break;
++    if (record.type !== "message" || record.message?.role !== "user") continue;
++    const content = record.message.content;
++    const text = (
++      typeof content === "string"
++        ? content
++        : Array.isArray(content)
++          ? content.map(part => ((part as { type?: unknown })?.type === "text" ? String((part as { text?: unknown }).text ?? "") : "")).join("\n")
++          : ""
++    ).trim();
++    if (text) out.push(text.length > HUMAN_MESSAGE_CHARS ? `${text.slice(0, HUMAN_MESSAGE_CHARS)}…` : text);
++  }
++  return out.slice(-HUMAN_MESSAGES);
++}
++
++export type CompactionSummaryInputs = {
++  /** The engine's session-start context for a compacted session (Claude's SessionStart source=compact). */
++  sessionContext: string | null;
++  /** Project files the compacted part of the session wrote or edited. */
++  changedFiles: string[];
++  /** The engine command that returns the current directive. */
++  nextCommand: string;
++  /** What the human said in the compacted part of the session, oldest first. */
++  humanMessages: string[];
++};
++
++/** The compaction summary for the active intent, built from its record; null without one. */
++export function compactionSummary(cwd: string, inputs: CompactionSummaryInputs): { summary: string; shortSummary: string } | null {
++  const record = activeRecordDir(cwd);
++  const state = record ? readText(join(record, "aidlc-state.md")) : null;
++  const stage = state ? stateField(state, "Current Stage") : null;
++  if (!record || !state || !stage) return null;
++  const marker = new RegExp(`^- \\[([ xSR?-])\\] ${stage.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} —`, "m").exec(state)?.[1];
++  const gate = marker !== undefined ? (GATE_STATES[marker] ?? "pending") : "unknown";
++  const phase = stateField(state, "Lifecycle Phase") ?? "unknown";
++  const list = (items: string[], none: string): string => (items.length > 0 ? items.map(item => `- ${item}`).join("\n") : none);
++  const decisions = auditRows(record)
++    .filter(row => row.event in DECISION_FIELDS)
++    .slice(-3)
++    .map(row => {
++      const said = DECISION_FIELDS[row.event].map(field => row.fields[field]).find(Boolean) ?? "";
++      const where = row.fields.Stage ?? row.fields["Current Stage"];
++      return `${row.timestamp} ${row.event}${where ? ` \`${where}\`` : ""}${said ? `: ${said.slice(0, 200)}` : ""}`;
++    });
++  const questions = openQuestions(cwd, record);
++  const sections = [
++    "# AI-DLC workflow state",
++    "This session was compacted. Carry on with what the human last asked. The workflow record below says where AI-DLC stands and outranks anything recalled from before the compaction.",
++    "## The human's latest messages before the compaction",
++    inputs.humanMessages.length > 0
++      ? inputs.humanMessages.map(text => text.split("\n").map(line => `> ${line}`.trimEnd()).join("\n")).join("\n\n")
++      : "None.",
++    "## Position",
++    list(
++      [
++        `Intent: \`${relative(cwd, record)}\``,
++        `Scope: ${stateField(state, "Scope") ?? "unknown"}`,
++        `Lifecycle Phase: ${phase}`,
++        `Current Stage: \`${stage}\` (gate: ${gate})`,
++        `Status: ${stateField(state, "Status") ?? "unknown"}`,
++        `Next Stage: ${stateField(state, "Next Stage") ?? "none"}`,
++        ...(stateField(state, "Active Unit") ? [`Active Unit: ${stateField(state, "Active Unit")}`] : []),
++      ],
++      "",
++    ),
++    "## Directive in flight",
++    directiveLine(record, inputs.nextCommand),
++    "## Human-approved artifacts",
++    list(
++      approvedArtifacts(cwd, record).map(path => `\`${path}\``),
++      "None yet.",
++    ),
++    "## Open questions",
++    list(
++      questions.length > MAX_OPEN_QUESTIONS ? [...questions.slice(0, MAX_OPEN_QUESTIONS), `${questions.length - MAX_OPEN_QUESTIONS} more`] : questions,
++      "None.",
++    ),
++    "## Recent human decisions",
++    list(decisions, "None recorded."),
++    "## Files changed in the compacted part of the session",
++    list(
++      inputs.changedFiles.map(path => `\`${path}\``),
++      "None.",
++    ),
++    ...(inputs.sessionContext ? ["## Engine context", inputs.sessionContext.trim()] : []),
++  ];
++  return { summary: `${sections.join("\n\n")}\n`, shortSummary: `AI-DLC ${phase} · ${stage} (${gate})` };
++}
++
++/** Project-relative paths the compaction's file operations wrote or edited. */
++export function changedFiles(cwd: string, fileOps: unknown): string[] {
++  const ops = fileOps && typeof fileOps === "object" ? (fileOps as Record<string, unknown>) : {};
++  const paths = new Set<string>();
++  for (const key of ["written", "edited"]) {
++    const value = ops[key];
++    for (const path of value instanceof Set || Array.isArray(value) ? value : []) {
++      if (typeof path !== "string") continue;
++      const rel = relative(cwd, resolve(cwd, path));
++      paths.add(rel.startsWith("..") || isAbsolute(rel) ? path : rel);
++    }
++  }
++  return [...paths].sort();
++}
++
+ // ---------------------------------------------------------------------------
+ // Sensor feedback (model-visible; audit rows are untouched).
+ // ---------------------------------------------------------------------------
+@@ -889,6 +1101,8 @@ export default function aidlcHarnessAdapter(pi: HarnessExtensionApi, options: Ad
+   let recordedPrintPrompt = false;
+   let constitutionCache: { key: string; text: string | null } | null = null;
+   let statusTimer: ReturnType<typeof setTimeout> | null = null;
++  // The stage the main session last saw; a change at turn end is a stage boundary.
++  let lastStage: string | null = null;
+ 
+   const isMain = (ctx: HarnessContext) => ctx.agent?.kind !== "sub";
+ 
+@@ -966,10 +1180,8 @@ export default function aidlcHarnessAdapter(pi: HarnessExtensionApi, options: Ad
+     process.env.AIDLC_HARNESS_NAME = "harness";
+     if (WELCOME_MESSAGE && ctx.hasUI && ctx.ui?.notify) ctx.ui.notify(WELCOME_MESSAGE, "info");
+     const result = await runCore("session-start", { ...base(ctx, "SessionStart"), source: event.reason === "resume" ? "resume" : "startup" }, ctx.cwd);
+-    const parsed = parseJson(result.stdout);
+-    const hookOutput = parsed?.hookSpecificOutput as { additionalContext?: unknown } | undefined;
+-    const context = hookOutput?.additionalContext ?? parsed?.additionalContext;
+-    pendingSessionContext = typeof context === "string" && context.trim() ? context : null;
++    pendingSessionContext = hookContext(result);
++    lastStage = currentStage(ctx.cwd);
+     refreshStatus(ctx);
+   });
+ 
+@@ -1176,11 +1388,36 @@ export default function aidlcHarnessAdapter(pi: HarnessExtensionApi, options: Ad
+     return undefined;
+   });
+ 
+-  pi.on("session_before_compact", async (_event, ctx) => {
++  pi.on("session_before_compact", async (event, ctx) => {
+     if (!isMain(ctx)) return;
+     await flush();
+     await runCore("validate-state", { ...base(ctx, "PreCompact") }, ctx.cwd);
+-    return undefined;
++    const preparation = (event.preparation ?? {}) as Record<string, unknown>;
++    // Focus instructions ask for a model-written summary; the harness writes it.
++    if (typeof event.customInstructions === "string" && event.customInstructions.trim()) return undefined;
++    if (typeof preparation.firstKeptEntryId !== "string" || typeof preparation.tokensBefore !== "number") return undefined;
++    // Claude Code re-injects this after a compaction (SessionStart, source=compact); here the summary carries it.
++    const started = await runCore("session-start", { ...base(ctx, "SessionStart"), source: "compact" }, ctx.cwd);
++    let built: ReturnType<typeof compactionSummary> = null;
++    try {
++      built = compactionSummary(ctx.cwd, {
++        sessionContext: hookContext(started),
++        changedFiles: changedFiles(ctx.cwd, preparation.fileOps),
++        nextCommand: `${aidlcCommand.join(" ")} orchestrate next`,
++        humanMessages: humanMessages(event.branchEntries, preparation.firstKeptEntryId),
++      });
++    } catch {
++      built = null; // An unreadable record falls back to the harness's own summary.
++    }
++    if (!built) return undefined;
++    return {
++      compaction: {
++        ...built,
++        firstKeptEntryId: preparation.firstKeptEntryId,
++        tokensBefore: preparation.tokensBefore,
++        details: { source: "aidlc" },
++      },
++    };
+   });
+ 
+   pi.on("session_shutdown", async (event, ctx) => {
+@@ -1189,7 +1426,19 @@ export default function aidlcHarnessAdapter(pi: HarnessExtensionApi, options: Ad
+     await runCore("session-end", { ...base(ctx, "SessionEnd"), reason: String(event.reason ?? "other") }, ctx.cwd);
+   });
+ 
+-  pi.on("turn_end", (_event, ctx) => refreshStatus(ctx));
++  pi.on("turn_end", (_event, ctx) => {
++    refreshStatus(ctx);
++    if (!isMain(ctx)) return;
++    const stage = currentStage(ctx.cwd);
++    const crossed = lastStage !== null && stage !== null && stage !== lastStage;
++    lastStage = stage;
++    if (!crossed || !ctx.compact) return;
++    const threshold = readHarnessSettings(ctx.cwd).compactAtStageBoundary ?? DEFAULT_COMPACT_AT_STAGE_BOUNDARY;
++    const percent = ctx.getContextUsage?.()?.percent;
++    if (threshold <= 0 || typeof percent !== "number" || percent < threshold) return;
++    // Not awaited: compaction aborts the run this turn belongs to, then resumes it.
++    ctx.compact().catch(() => {});
++  });
+   pi.on("agent_end", (_event, ctx) => refreshStatus(ctx));
+ }
+ 
+diff --git a/tests/e2e/t-rpc-harness-live.serial.test.ts b/tests/e2e/t-rpc-harness-live.serial.test.ts
+index 336bc961bcd68e30ba27f4e933efc1b4fbca3e1b..5485d0b0ba2f74783853c59f3c3c5dd1b1e7c438 100644
+--- a/tests/e2e/t-rpc-harness-live.serial.test.ts
++++ b/tests/e2e/t-rpc-harness-live.serial.test.ts
+@@ -12,9 +12,16 @@
+ //   - S6: a write that fires a sensor returns the verdict to the model.
+ //   - S7: a direct state-transition verb through bash is refused.
+ //   - S8: ending the turn mid-workflow is answered with a continuation.
+-//   - S9: compaction leaves the recovery breadcrumb.
++//   - S9: compaction leaves the recovery breadcrumb and a summary built from the
++//     record, from which the conductor's first engine call is `next`.
++//   - S9b: a turn that crosses a stage boundary compacts, and the run resumes
++//     on what the human asked.
+ //   - S12: an agent's configured thinking level reaches its spawned session.
+ //   - S14: a space switch changes the method memory the next turn sees.
++//   - S17: a reviewer runs on another model family than the builder's.
++//   - S18: a dispatched developer is advised against the approved artifacts.
++//   - S19a/S19: the shipped stream rules match what they guard; a stub write is
++//     interrupted before it reaches disk.
+ //
+ // LIVE GATE: requires AIDLC_HARNESS_RPC_LIVE=1, Coding Harness >= 1.1.0
+ // (AIDLC_HARNESS_BIN or `harness` on PATH) and an Anthropic credential in
+@@ -253,16 +260,82 @@ describe("t-rpc-harness-live", () => {
+   );
+ 
+   live(
+-    "S9: compaction runs validate-state, which leaves the recovery breadcrumb",
++    "S9: compaction runs validate-state and summarizes from the record; the conductor resumes with the engine's next directive",
+     async () => {
+       const dir = seededProject("requirements-analysis");
++      const state = readFileSync(seededStateFile(dir), "utf-8");
++      writeActiveDirectiveMarker(dir, { kind: "run-stage", stage: "requirements-analysis", state_sha256: stateDigest(state) });
+       const rpc = session(dir);
+       await rpc.start();
+       await rpc.prompt("Reply with the single word ready.");
+       const compacted = await rpc.command({ type: "compact" }, 5 * 60_000);
+-      await rpc.close();
+       expect(compacted.success, JSON.stringify(compacted)).toBe(true);
++      const result = compacted.data as { summary: string; details?: unknown };
++      expect(result.details).toEqual({ source: "aidlc" });
++      expect(result.summary).toContain("Current Stage: `requirements-analysis` (gate: in progress)");
++      expect(result.summary).toContain("`run-stage` for `requirements-analysis`");
++      expect(result.summary).toContain("run `bun .harness-aidlc/tools/aidlc.ts engine orchestrate next`");
++      expect(result.summary).toContain("AIDLC WORKFLOW ACTIVE");
+       expect(existsSync(join(seededRecordDir(dir), ".aidlc-engine", "recovery.md"))).toBe(true);
++      expect(audit(dir)).toContain("**Event**: SESSION_COMPACTED");
++      // From the summary alone the conductor's first engine call is `next`, with no Stop-hook correction.
++      const command = (args: unknown) => String((args as { command?: unknown } | undefined)?.command ?? "");
++      const resumed = await rpc.prompt("Continue the AI-DLC workflow.", {
++        stopWhen: (frame) => frame.type === "tool_execution_start" && frame.toolName === "bash" && command(frame.args).includes("orchestrate next"),
++      });
++      await rpc.close();
++      const bash = resumed.toolCalls.filter((call) => call.toolName === "bash").map((call) => command(call.args));
++      expect(bash[0] ?? "", bash.join("\n")).toContain("orchestrate next");
++      expect(JSON.stringify(resumed.frames)).not.toContain("The AIDLC workflow has a pending step");
++    },
++    10 * 60_000,
++  );
++
++  live(
++    "S9b: a turn that crosses a stage boundary compacts from the record, and the run carries on",
++    async () => {
++      const dir = seededProject("requirements-analysis");
++      writeFileSync(join(dir, "aidlc.settings.json"), `${JSON.stringify({ schemaVersion: 1, harness: { schemaVersion: 1, compactAtStageBoundary: 1 } })}\n`);
++      const rpc = session(dir);
++      await rpc.start();
++      let moved = false;
++      // The stage moves while the turn's tool runs, as an engine transition would move it.
++      await rpc.prompt("Run `sleep 3` with the bash tool, then reply with the single word done.", {
++        stopWhen: (frame) => {
++          if (!moved && frame.type === "tool_execution_start" && frame.toolName === "bash") {
++            moved = true;
++            const file = seededStateFile(dir);
++            writeFileSync(file, readFileSync(file, "utf-8").replace(/(- \*\*Current Stage\*\*:\s*)[^\n]+/, "$1user-stories"));
++          }
++          return false;
++        },
++      });
++      const state = (await rpc.command({ type: "get_state" })).data as { sessionFile?: string };
++      await rpc.close();
++      const entries = readFileSync(String(state.sessionFile), "utf-8")
++        .split("\n")
++        .filter(Boolean)
++        .map(
++          (line) =>
++            JSON.parse(line) as {
++              type?: string;
++              summary?: string;
++              details?: unknown;
++              message?: { role?: string; content?: Array<{ type?: string; text?: string; name?: string }> };
++            },
++        );
++      const at = entries.findIndex((entry) => entry.type === "compaction");
++      expect(at, "a compaction entry").toBeGreaterThan(-1);
++      expect(entries[at].details).toEqual({ source: "aidlc" });
++      expect(entries[at].summary).toContain("Current Stage: `user-stories`");
++      expect(entries[at].summary).toContain("> Run `sleep 3` with the bash tool, then reply with the single word done.");
++      // The resumed run finishes what the human asked instead of starting workflow work.
++      const after = entries
++        .slice(at + 1)
++        .filter((entry) => entry.type === "message" && entry.message?.role === "assistant")
++        .flatMap((entry) => entry.message?.content ?? []);
++      expect(after.filter((part) => part.type === "toolCall").map((part) => part.name)).toEqual([]);
++      expect(after.map((part) => part.text ?? "").join(" ").toLowerCase()).toContain("done");
+     },
+     10 * 60_000,
+   );
+diff --git a/tests/unit/t-harness-adapter-map.test.ts b/tests/unit/t-harness-adapter-map.test.ts
+index ff6079c51a29b927eff567c26fbe20f057cde055..ca80ca3f1f68c7f7e97bbd1ca836f6fa4e6c0ec1 100644
+--- a/tests/unit/t-harness-adapter-map.test.ts
++++ b/tests/unit/t-harness-adapter-map.test.ts
+@@ -5,7 +5,7 @@
+ // batch dispatch, and what never reaches a hook (main-only events in subagents,
+ // chained framework shell commands).
+ //
+-// covers: function:claudeCalls, function:taskItems, function:withTaskAssignments, function:withoutRecommended, function:askHookFields, function:bashBoundaryViolation, function:realPath, function:parseSensorFeedback, function:formatSensorFeedback, function:activeTodo, function:reviewerRouting, function:readHarnessSettings, function:approvedArtifacts, function:writeWatchdogContext, function:noMockPractices, function:writeDerivedRules
++// covers: function:claudeCalls, function:taskItems, function:withTaskAssignments, function:withoutRecommended, function:askHookFields, function:bashBoundaryViolation, function:realPath, function:parseSensorFeedback, function:formatSensorFeedback, function:activeTodo, function:reviewerRouting, function:readHarnessSettings, function:approvedArtifacts, function:writeWatchdogContext, function:noMockPractices, function:writeDerivedRules, function:compactionSummary, function:changedFiles, function:currentStage, function:humanMessages
+ 
+ import { describe, expect, test } from "bun:test";
+ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+@@ -48,11 +48,13 @@ function load(responses: Record<string, (input: Record<string, unknown>) => Core
+     payload: Record<string, unknown>,
+     kind: "main" | "sub" = "main",
+     sessionFile = "/sessions/p/2026_abc.jsonl",
++    context: Record<string, unknown> = {},
+   ) => {
+     const ctx = {
+       cwd: "/work/project",
+       agent: kind === "main" ? { kind, id: "main", name: "main" } : { kind, id: "0-Review", name: "aidlc-architecture-reviewer-agent" },
+       sessionManager: { getSessionFile: () => sessionFile, getSessionId: () => "abc" },
++      ...context,
+     };
+     let result: unknown;
+     for (const handler of handlers.get(event) ?? []) result = (await handler(payload, ctx)) ?? result;
+@@ -344,6 +346,167 @@ describe("derived stream rules", () => {
+   });
+ });
+ 
++describe("state-anchored compaction", () => {
++  const RECORD = join("aidlc", "spaces", "default", "intents", "260101-fix");
++  const auditRow = (title: string, timestamp: string, event: string, fields: Record<string, string>) =>
++    `## ${title}\n**Timestamp**: ${timestamp}\n**Event**: ${event}\n${Object.entries(fields)
++      .map(([key, value]) => `**${key}**: ${value}\n`)
++      .join("")}\n---\n\n`;
++  const setStage = (dir: string, stage: string) => {
++    const file = join(dir, RECORD, "aidlc-state.md");
++    writeFileSync(file, readFileSync(file, "utf-8").replace(/(- \*\*Current Stage\*\*:\s*)[^\n]+/, `$1${stage}`));
++  };
++  // Requirements analysis awaiting approval, with one approved stage, one open question and four human decisions.
++  const workflowProject = (): string => {
++    const dir = mkdtempSync(join(tmpdir(), "t-harness-compact-"));
++    const record = join(dir, RECORD);
++    mkdirSync(join(record, "audit"), { recursive: true });
++    writeFileSync(join(dir, "aidlc", "spaces", "default", "intents", "active-intent"), "260101-fix\n");
++    writeFileSync(
++      join(record, "aidlc-state.md"),
++      readFileSync(join(import.meta.dir, "..", "fixtures", "state-brownfield-feature.md"), "utf-8").replace(
++        "- [-] requirements-analysis",
++        "- [?] requirements-analysis",
++      ),
++    );
++    mkdirSync(join(record, "inception", "reverse-engineering"), { recursive: true });
++    writeFileSync(join(record, "inception", "reverse-engineering", "api-documentation.md"), "# API\n");
++    writeFileSync(join(record, "inception", "reverse-engineering", "reverse-engineering-questions.md"), "## Anything else?\n[Answer]: No\n");
++    mkdirSync(join(record, "inception", "requirements-analysis"), { recursive: true });
++    writeFileSync(
++      join(record, "inception", "requirements-analysis", "requirements-analysis-questions.md"),
++      "# Questions\n\n## Question 1: Which users?\nA. Admins\n[Answer]: A\n\n## Question 2: Retention period?\nA. 30 days\n[Answer]:\n",
++    );
++    writeFileSync(
++      join(record, "audit", "host-a.md"),
++      auditRow("Gate Approved", "2026-01-01T00:00:01Z", "GATE_APPROVED", { Stage: "reverse-engineering", "User Input": "Approve" }) +
++        auditRow("Question Answered", "2026-01-01T00:00:04Z", "QUESTION_ANSWERED", { Stage: "requirements-analysis", Details: "Admins only" }),
++    );
++    writeFileSync(
++      join(record, "audit", "host-b.md"),
++      auditRow("Question Answered", "2026-01-01T00:00:02Z", "QUESTION_ANSWERED", { Stage: "practices-discovery", Details: "Nothing to add" }) +
++        auditRow("Stage Start", "2026-01-01T00:00:03Z", "STAGE_STARTED", { Stage: "requirements-analysis" }) +
++        auditRow("Gate Rejected", "2026-01-01T00:00:05Z", "GATE_REJECTED", { Stage: "requirements-analysis", Feedback: "Add retention" }),
++    );
++    mkdirSync(join(record, ".aidlc-engine"), { recursive: true });
++    writeFileSync(
++      join(record, ".aidlc-engine", "active-directive.json"),
++      JSON.stringify({ version: 2, kind: "ask", ask_type: "gate", stage: "requirements-analysis", part: 2, parts: 3 }),
++    );
++    return dir;
++  };
++  const sessionContext = () => ({ stdout: JSON.stringify({ additionalContext: "AIDLC WORKFLOW ACTIVE\nScope: feature" }), stderr: "", code: 0 });
++
++  test("the summary is the workflow record: position, gate, directive, approvals, open questions, decisions, changed files", async () => {
++    const dir = workflowProject();
++    try {
++      const { emit, calls, hooks } = load({ "session-start": sessionContext });
++      const preparation = {
++        firstKeptEntryId: "e9",
++        tokensBefore: 1234,
++        fileOps: { read: new Set(["src/c.ts"]), written: new Set([join(dir, "src", "a.ts")]), edited: new Set(["src/b.ts"]) },
++      };
++      const user = (id: string, content: unknown) => ({ type: "message", id, message: { role: "user", content } });
++      const branchEntries = [
++        user("e1", "First ask, older than the last three."),
++        user("e2", "/aidlc add saved searches"),
++        { type: "message", id: "e3", message: { role: "assistant", content: [{ type: "text", text: "On it." }] } },
++        user("e4", [{ type: "text", text: "Keep the retention short." }, { type: "image" }]),
++        user("e5", `Two lines\n${"x".repeat(700)}`),
++        user("e9", "Kept in full after the compaction."),
++      ];
++      const result = (await emit("session_before_compact", { preparation, branchEntries }, "main", undefined, { cwd: dir })) as {
++        compaction: { summary: string; shortSummary: string; firstKeptEntryId: string; tokensBefore: number; details: unknown };
++      };
++      expect(hooks()).toEqual(["validate-state", "session-start"]);
++      expect(calls[1].input.source).toBe("compact");
++      const { summary, ...rest } = result.compaction;
++      expect(rest).toEqual({
++        shortSummary: "AI-DLC INCEPTION · requirements-analysis (awaiting approval)",
++        firstKeptEntryId: "e9",
++        tokensBefore: 1234,
++        details: { source: "aidlc" },
++      });
++      for (const part of [
++        "Current Stage: `requirements-analysis` (gate: awaiting approval)",
++        "## The human's latest messages before the compaction\n\n" +
++          "> /aidlc add saved searches\n\n> Keep the retention short.\n\n" +
++          `> Two lines\n> ${"x".repeat(600 - "Two lines\n".length)}…\n\n## Position`,
++        "`ask` (gate) for `requirements-analysis` part 2 of 3 was in flight; the compaction cleared the parts already delivered. " +
++          "To continue the workflow, run `bun .harness-aidlc/tools/aidlc.ts engine orchestrate next`",
++        `## Human-approved artifacts\n\n- \`${join(RECORD, "inception", "reverse-engineering", "api-documentation.md")}\`\n\n`,
++        `## Open questions\n\n- \`${join(RECORD, "inception", "requirements-analysis", "requirements-analysis-questions.md")}\`: Question 2: Retention period?\n\n`,
++        "## Recent human decisions\n\n" +
++          "- 2026-01-01T00:00:02Z QUESTION_ANSWERED `practices-discovery`: Nothing to add\n" +
++          "- 2026-01-01T00:00:04Z QUESTION_ANSWERED `requirements-analysis`: Admins only\n" +
++          "- 2026-01-01T00:00:05Z GATE_REJECTED `requirements-analysis`: Add retention\n\n",
++        "## Files changed in the compacted part of the session\n\n- `src/a.ts`\n- `src/b.ts`\n\n",
++        "## Engine context\n\nAIDLC WORKFLOW ACTIVE\nScope: feature\n",
++      ]) {
++        expect(summary).toContain(part);
++      }
++    } finally {
++      rmSync(dir, { recursive: true, force: true });
++    }
++  });
++
++  test("without a workflow, or with focus instructions, the harness writes the summary", async () => {
++    const dir = workflowProject();
++    try {
++      const preparation = { firstKeptEntryId: "e9", tokensBefore: 1234, fileOps: {} };
++      const focused = load({ "session-start": sessionContext });
++      expect(await focused.emit("session_before_compact", { preparation, customInstructions: "keep the API notes" }, "main", undefined, { cwd: dir })).toBeUndefined();
++      expect(focused.hooks()).toEqual(["validate-state"]);
++      rmSync(join(dir, "aidlc"), { recursive: true, force: true });
++      const bare = load({ "session-start": sessionContext });
++      expect(await bare.emit("session_before_compact", { preparation }, "main", undefined, { cwd: dir })).toBeUndefined();
++      expect(bare.hooks()).toEqual(["validate-state", "session-start"]);
++    } finally {
++      rmSync(dir, { recursive: true, force: true });
++    }
++  });
++
++  test("a turn that crosses a stage boundary compacts once context use reaches the threshold", async () => {
++    const dir = workflowProject();
++    const installRoot = process.env.AIDLC_INSTALL_ROOT;
++    process.env.AIDLC_INSTALL_ROOT = dir; // no machine-level harness settings
++    try {
++      const { emit } = load();
++      let compactions = 0;
++      let percent = 55;
++      const context = { cwd: dir, compact: async () => void compactions++, getContextUsage: () => ({ percent }) };
++      const turn = () => emit("turn_end", {}, "main", undefined, context);
++      await emit("session_start", { reason: "startup" }, "main", undefined, context);
++      await turn();
++      expect(compactions).toBe(0);
++      setStage(dir, "user-stories");
++      await emit("turn_end", {}, "sub", undefined, context);
++      expect(compactions, "a subagent turn is not the main session's boundary").toBe(0);
++      await turn();
++      expect(compactions, "40% by default").toBe(1);
++      await turn();
++      expect(compactions).toBe(1);
++      percent = 39;
++      setStage(dir, "refined-mockups");
++      await turn();
++      expect(compactions).toBe(1);
++      writeFileSync(join(dir, "aidlc.settings.json"), JSON.stringify({ harness: { schemaVersion: 1, compactAtStageBoundary: 30 } }));
++      setStage(dir, "domain-design");
++      await turn();
++      expect(compactions).toBe(2);
++      writeFileSync(join(dir, "aidlc.settings.json"), JSON.stringify({ harness: { schemaVersion: 1, compactAtStageBoundary: 0 } }));
++      percent = 99;
++      setStage(dir, "units-generation");
++      await turn();
++      expect(compactions, "0 turns it off").toBe(2);
++    } finally {
++      if (installRoot === undefined) delete process.env.AIDLC_INSTALL_ROOT;
++      else process.env.AIDLC_INSTALL_ROOT = installRoot;
++      rmSync(dir, { recursive: true, force: true });
++    }
++  });
++});
++
+ describe("tool_result", () => {
+   test("an answered ask reaches record-human-turn with each question's own answer", async () => {
+     const { emit, calls } = load();

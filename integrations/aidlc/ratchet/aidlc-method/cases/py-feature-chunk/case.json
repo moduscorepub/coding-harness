@@ -1,0 +1,7 @@
+{
+  "id": "py-feature-chunk",
+  "tags": ["feature", "py"],
+  "scope": "express",
+  "request": "Add chunk(items, size) to lists/core.py: it splits a list into consecutive lists of at most size items, so chunk([1, 2, 3, 4, 5], 2) is [[1, 2], [3, 4], [5]] and chunk([], 3) is []. A size below 1 raises ValueError. Cover it in the project's tests.",
+  "hidden": ["python3", "__hidden__/check_chunk.py"]
+}

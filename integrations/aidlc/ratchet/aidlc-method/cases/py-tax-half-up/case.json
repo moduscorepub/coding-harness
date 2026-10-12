@@ -1,0 +1,7 @@
+{
+  "id": "py-tax-half-up",
+  "tags": ["bugfix", "py"],
+  "scope": "bugfix",
+  "request": "tax_cents() in shop/tax.py rounds halves to even: tax_cents(250, 5) returns 12, but tax rounds half up, so it must be 13; `python3 -m unittest tests/check_tax.py` fails. Rates can be fractional, such as 7.5.",
+  "hidden": ["python3", "__hidden__/check_tax.py"]
+}

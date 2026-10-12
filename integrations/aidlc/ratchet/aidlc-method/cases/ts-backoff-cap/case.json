@@ -1,0 +1,7 @@
+{
+  "id": "ts-backoff-cap",
+  "tags": ["bugfix", "ts"],
+  "scope": "bugfix",
+  "request": "backoffDelay() in src/backoff.ts ignores its cap: backoffDelay(10) returns 102400 but a delay must never exceed maxMs (5000 by default), and `bun run test` fails.",
+  "hidden": ["bun", "test", "./__hidden__/backoff.check.ts"]
+}

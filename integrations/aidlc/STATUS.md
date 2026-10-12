@@ -11,7 +11,7 @@ The running record of the end-to-end build: what passed at each gate, what devia
 | P2 | Core registration, packager, init/doctor, plugins, release scripts | done | C01–C09; fork suite equals the baseline; site gate 342 sites / 25 files |
 | P3 | Hook contracts, adapter, deterministic tests, live S1–S14 | done | C10: S3/S4/S5/S12/S13/S14 deterministic contracts; live S1–S3, S6–S12, S14 green (8 scenarios, 243 s) |
 | P4 | Live parity with Claude Code, coexistence | done | S15/T4 parity green (811 s), S16 coexistence green (258 s); harness H4; fork suite better than baseline (below) |
-| P6 | Improvements A1–A4, B1, B3, B4, B2 | pending | — |
+| P6 | Improvements A1–A4, B1, B3, B4, B2 | in progress | A1–A4, B1, B3, B4 committed with live S9/S9b and S17–S22 green (below); B2 kit built, grader preflight clean, `/ratchet aidlc-method` running |
 | P5 | Version 1.0.0, real install, dogfood | pending | — |
 
 ## Verified so far
@@ -50,6 +50,20 @@ The running record of the end-to-end build: what passed at each gate, what devia
 
 - **S15/T4 parity** (`t-harness-bugfix-parity`): the same `/aidlc --scope bugfix …` request on the same fixture (a Bun library whose discount arithmetic is wrong, with a failing test), driven to completion under Claude Code 2.1.293 (Agent SDK, `claude-sonnet-5-5`) and Coding Harness 1.1.0 (RPC, `anthropic/claude-sonnet-5-5`), every structured question answered with its first option. Both workflows complete, both fixture test suites pass, and the two runs agree on stage progress, on the per-stage events the engine enforces (stage, phase and workflow transitions, workspace setup, plan approval, summary confirmation, reviews and gates), and on the intent record's artifact file set. 1/1 pass in 811 s. Three earlier runs shaped the comparison: run 1 found the Plan Approval defect below (the harness stopped at code generation); runs 2 and 3 completed and differed only in what the model chose (learnings proposed, a retried command, the conductor's own logging of non-gate questions), which the comparison now excludes; it still fails on run 1.
 - **S16 coexistence** (`t-harness-coexistence-live`): a project configured for Claude Code and then Coding Harness. In the harness session `/aidlc` runs the harness skill and no framework command touches `.claude/`; Claude Code's `/aidlc --doctor` then passes on the workflow the harness started and names the Claude distribution. Each tree's doctor names its own distribution (deterministic, `t-harness-config-doctor`). 1/1 pass in 258 s, with the fork's native `aidlc` on PATH.
+- **P6 improvements on Coding Harness 1.1.0** (live: RPC, `anthropic/claude-sonnet-5-5`; each scenario green on its own run):
+
+  | Item | Commit | Scenario | What the run proves |
+  |---|---|---|---|
+  | A1 cross-vendor review | `cbdc0fc0c` | S17 | a reviewer subagent spawned in a workflow runs on a model family other than the builder's (`ollama/qwen2.5-coder:0.5b` against Anthropic) |
+  | A2 continuous advisor | `ea0e6fb20` | S18 | the developer's advisor reviews a write against the human-approved `scope.md` and cites it |
+  | A3 stream-time rules | `b13477a0f` | S19a, S19 | the four shipped rules trigger on what they guard and nothing else (harness rule tester); a `not implemented` write is interrupted before it reaches disk and the session records a `ttsr_injection` |
+  | A4 state-anchored compaction | `7574323b0` | S9, S9b | RPC `compact` returns a summary built from the record (stage, gate, directive in flight, `details.source = aidlc`); the conductor's first engine call afterwards is `orchestrate next`; a turn that crosses a stage boundary compacts and the resumed run finishes what the human asked |
+  | B1 project checkers | `1a1c69723` | S20 | `/aidlc-checkers` records the fixture's lint (`generic`, `{file}`) and test (`exit-code`) commands; a write that breaks the lint fails `project-checks` and the finding reaches the model |
+  | B3 prewalk | `4c4a4ddbe` | S21 | the dispatched developer plans and makes its first write on Sonnet, then continues on the `smol` model (Haiku) |
+  | B4 debugger | `310c6109c` | S22 | in a Python bugfix the debugger (`xd://debug`, debugpy from the project `.venv`) runs before the first edit of the faulty file, and the diagnosis cites `subtotal = 5000`, `discount = 6000` at the breakpoint |
+
+  B1 is a core change: `project-checks` ships to every distribution (deterministic `t-sensor-project-checks`, including a real dispatcher fire). The sensor inventory tests (`t93`, `t95`, `t227`, `t230`, `t239`) and the sensor documentation follow it.
+
 
 ## Deviations from SPEC v1
 - **Source-based fork.** v1 patched installed runtime trees. v2 forks the upstream source, because it is public (MIT-0), reproduces the install exactly, and grafts with `git am`.
@@ -66,6 +80,7 @@ The running record of the end-to-end build: what passed at each gate, what devia
 - **Coexistence needs four changes.** With the Claude distribution in the same project: (1) harness H4 — an extension-contributed skill replaces another tool's same-name skill, or Claude's `/aidlc` shadowed the harness one; (2) the adapter exports `AIDLC_HARNESS_DIR=.harness-aidlc` at session start so the native `aidlc` resolves this tree instead of the first discovered (`.claude`); (3) the adapter refuses `bun <other tool's dir>/tools/aidlc*.ts`; (4) the doctor's Project heading names the tree that ran it. The harness still prefers `.claude/CLAUDE.md` over `AGENTS.md` as project context; the method arrives through the adapter either way (documented).
 - **2.10.0 root-file signatures.** C09 changes the shared root `AGENTS.md`, so each distribution's manifest now records its 2.10.0 variant (and copilot's copy-channel variant) as a legacy whole-file signature; an upgraded 2.10.0 project still adopts its unmarked file.
 - **Harness onboarding prerequisites.** The copy channel runs `bun .harness-aidlc/tools/aidlc.ts`; the onboarding now says so (the release projection rewrites it to the native Runtime contract, as for every other distribution). The former "aidlc on PATH … AIDLC_BIN" line was wrong for both channels.
+- **P6 improvements differ from SPEC v2 §9 in detail.** SPEC.md "As built" lists each difference and its reason: the `harness` settings section (A1), artifacts inlined into the advisor brief (A2), the narrowed state-files rule and the derived rules (A3), the summary contents and the turn-end trigger (A4), the `checkers.json` contract and the prompt-template discovery (B1), the harness's own prewalk switches (B3), the debug-first rule (B4), and the ratchet's change paths and RPC driver (B2). Two live findings drove changes: S9b showed a record-only summary lost the human's request, so the summary carries the human's last messages; S22 showed guidance text alone did not get the debugger used, so a bugfix holds the first source edit.
 
 ## Decisions
 | Date | Decision |

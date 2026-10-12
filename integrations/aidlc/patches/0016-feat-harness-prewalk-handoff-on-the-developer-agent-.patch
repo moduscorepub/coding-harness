@@ -1,0 +1,134 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 06:52:25 +0100
+Subject: [PATCH 16/17] feat(harness): prewalk handoff on the developer agent
+ (B3)
+
+---
+ docs/guide/harnesses/coding-harness.md      | 12 ++++++
+ harness/harness/emit.ts                     | 10 +++--
+ tests/e2e/t-rpc-harness-live.serial.test.ts | 43 +++++++++++++++++++++
+ tests/unit/t-harness-emit.test.ts           |  3 +-
+ 4 files changed, 63 insertions(+), 5 deletions(-)
+
+diff --git a/docs/guide/harnesses/coding-harness.md b/docs/guide/harnesses/coding-harness.md
+index 8ba142c199421e9f9704c10a40e3781561d3b2a3..3f1e76a0674875b966e9b9624814a62d1023f6c1 100644
+--- a/docs/guide/harnesses/coding-harness.md
++++ b/docs/guide/harnesses/coding-harness.md
+@@ -216,6 +216,18 @@ manifests and scripts, runs each candidate command, writes
+ `aidlc/spaces/<space>/checkers.json` and shows what it recorded. Edit the file
+ by hand afterwards as you like; other hosts read the same file.
+ 
++### Prewalk on the developer
++
++`aidlc-developer-agent` also carries `prewalk: true`. The developer starts on
++its normal model, reads the approved plan and records its steps with `todo`.
++At its first edit or write after that, Coding Harness hands the rest of the
++implementation to the `smol` model role. Assign that role (`modelRoles.smol`),
++because an unassigned `smol` inherits the default model and the handoff becomes
++a no-op. Override per agent with the harness's own `task.agentPrewalk` setting
++(`off`, `on` or a model pattern for `aidlc-developer-agent`, also under
++`/agents`). For the conductor itself, use the harness's session-level
++`prewalk.enabled`.
++
+ ## Alongside Claude Code
+ 
+ One project can carry both distributions: run `aidlc config --harness claude`
+diff --git a/harness/harness/emit.ts b/harness/harness/emit.ts
+index 893c9ff69b76539ff3331566f1746818cc2c58e6..08e26bf775aff47a083a629ea216005e09577bd6 100644
+--- a/harness/harness/emit.ts
++++ b/harness/harness/emit.ts
+@@ -40,11 +40,13 @@ export { default } from "../../{{HARNESS_DIR}}/host/adapter.ts";
+ `;
+ 
+ // Harness-native frontmatter a persona gains on this host, keyed by the short
+-// agent name. The harness owns the switches (`advisor.enabled`, per-agent
+-// overrides), so these only declare intent.
++// agent name. The harness owns the switches (`advisor.enabled`,
++// `task.agentPrewalk`), so these only declare intent.
+ const HOST_AGENT_KEYS: Record<string, string[]> = {
+-  // A continuous advisor reviews construction turn by turn against the approved artifacts.
+-  developer: ["advisor: true"],
++  // A continuous advisor reviews construction turn by turn against the approved
++  // artifacts; prewalk hands the implementation to the `@smol` model at the first
++  // edit, once the planning model has read the approved plan and started.
++  developer: ["advisor: true", "prewalk: true"],
+ };
+ 
+ // Rewrite a core persona .md into its harness task-agent twin.
+diff --git a/tests/e2e/t-rpc-harness-live.serial.test.ts b/tests/e2e/t-rpc-harness-live.serial.test.ts
+index c784277b44a797160c0f8437a81e43e8011579b6..a01876a7cf2af6c2d66d3c86e8115f5f0b99838e 100644
+--- a/tests/e2e/t-rpc-harness-live.serial.test.ts
++++ b/tests/e2e/t-rpc-harness-live.serial.test.ts
+@@ -24,6 +24,8 @@
+ //     interrupted before it reaches disk.
+ //   - S20: /aidlc-checkers records the project's lint and test commands, and a
+ //     write that breaks the lint fails project-checks with the finding.
++//   - S21: a dispatched developer hands off to the smol model at its first
++//     write after recording its todos (prewalk).
+ //
+ // LIVE GATE: requires AIDLC_HARNESS_RPC_LIVE=1, Coding Harness >= 1.1.0
+ // (AIDLC_HARNESS_BIN or `harness` on PATH) and an Anthropic credential in
+@@ -406,6 +408,47 @@ describe("t-rpc-harness-live", () => {
+     10 * 60_000,
+   );
+ 
++  live(
++    "S21: a dispatched developer hands off to the @smol model at its first write (prewalk)",
++    async () => {
++      const dir = project();
++      // An unassigned smol role inherits the default model, which would make the handoff a no-op.
++      const agentDir = agentDirectory();
++      writeFileSync(join(agentDir, "config.yml"), "modelRoles:\n  smol: anthropic/claude-haiku-5-5\n");
++      const rpc = session(dir, undefined, agentDir);
++      await rpc.start();
++      await rpc.prompt(
++        "Call the task tool exactly once with agent `aidlc-developer-agent`, name `Build`, and the assignment " +
++          "`Do these in order, one tool call per turn. 1: call the todo tool to record steps 2-4, and nothing else in that turn. " +
++          "2: write src/a.ts exporting const a = 1. 3: write src/b.ts exporting const b = 2. " +
++          "4: mark the todos done and reply done.` Then stop.",
++        { stopWhen: (frame) => frame.type === "tool_execution_end" && frame.toolName === "task" },
++      );
++      const state = (await rpc.command({ type: "get_state" })).data as { sessionFile?: string };
++      await rpc.close();
++      const artifacts = String(state.sessionFile).replace(/\.jsonl$/, "");
++      const transcript = readdirSync(artifacts, { recursive: true })
++        .map(String)
++        .find((name) => /(^|\/)Build\.jsonl$/.test(name));
++      expect(transcript, readdirSync(artifacts, { recursive: true }).join(", ")).toBeDefined();
++      const turns = readFileSync(join(artifacts, transcript!), "utf-8")
++        .split("\n")
++        .filter(Boolean)
++        .map((line) => JSON.parse(line) as { type?: string; message?: { role?: string; model?: string; content?: Array<{ type?: string; name?: string }> } })
++        .filter((entry) => entry.type === "message" && entry.message?.role === "assistant")
++        .map((entry) => ({
++          model: String(entry.message?.model ?? ""),
++          writes: (entry.message?.content ?? []).some((part) => part.type === "toolCall" && (part.name === "write" || part.name === "edit")),
++        }));
++      const firstWrite = turns.findIndex((turn) => turn.writes);
++      expect(firstWrite, JSON.stringify(turns)).toBeGreaterThan(-1);
++      // The planning model makes the first write; the turns after it run on the @smol model.
++      expect(turns[firstWrite].model, JSON.stringify(turns)).not.toContain("haiku");
++      expect(turns.slice(firstWrite + 1).some((turn) => turn.model.includes("haiku")), JSON.stringify(turns)).toBe(true);
++    },
++    10 * 60_000,
++  );
++
+   live(
+     "S20: /aidlc-checkers records the project's lint and test commands, and a bad write fails project-checks with feedback",
+     async () => {
+diff --git a/tests/unit/t-harness-emit.test.ts b/tests/unit/t-harness-emit.test.ts
+index d1f72a25ba3c24d367d1f023917978d7850d06b1..17816d5eccaff54fd97d127505d7bd68d1dabfb9 100644
+--- a/tests/unit/t-harness-emit.test.ts
++++ b/tests/unit/t-harness-emit.test.ts
+@@ -49,8 +49,9 @@ describe("persona task agents", () => {
+       }
+       expect(fields.thinkingLevel ?? null).toBe(core.tier === "balanced" ? "medium" : null);
+       expect(fields.spawns ?? null).toBe(/^Task$/i.test(core.disallowedTools ?? "") ? "[]" : null);
+-      // Only the builder carries a continuous advisor; reviewers review at the gate.
++      // Only the builder carries a continuous advisor and the prewalk handoff; reviewers review at the gate.
+       expect(fields.advisor ?? null).toBe(name === "aidlc-developer-agent.md" ? "true" : null);
++      expect(fields.prewalk ?? null).toBe(name === "aidlc-developer-agent.md" ? "true" : null);
+       expect(text).not.toContain("{{");
+       expect(text).not.toContain("<active-space>/memory/");
+     });

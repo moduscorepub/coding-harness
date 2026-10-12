@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
 Date: Mon, 12 Oct 2026 00:00:56 +0100
-Subject: [PATCH 09/10] feat(core): shared content lists Coding Harness
+Subject: [PATCH 09/17] feat(core): shared content lists Coding Harness
 
 The shared onboarding names the .harness-aidlc engine directory and the
 harness onboarding file, and workspace detection documents the harness

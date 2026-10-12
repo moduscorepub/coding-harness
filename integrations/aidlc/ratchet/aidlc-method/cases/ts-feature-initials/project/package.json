@@ -1,0 +1,6 @@
+{
+  "name": "names",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "bun test ./test/names.check.ts" }
+}

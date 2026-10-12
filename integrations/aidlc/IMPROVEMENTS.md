@@ -197,8 +197,23 @@ Verification found that the harness never emits `resources_discover`: the event 
 - **H3** adds `rulePaths` (rules feed the rulebook and TTSR buckets) and `watchdogPaths` (advisor discovery).
 - **H2** handles coexistence with the Claude distribution.
 
-All three ship in harness 1.1.0.
+All three ship in harness 1.1.0, with a fourth, **H4**: a skill an extension contributes replaces another tool's skill of the same name, so the harness `/aidlc` wins over Claude Code's in a project that carries both distributions.
 
 ## 4. Where each item is specified
 
 SPEC.md §9 has the granular design and acceptance scenarios (S17–S22) for A1–A4, B1–B4 and B2. Build order is SPEC.md §10, phase P6.
+
+## 5. As built
+
+Every item is built and verified live on Coding Harness 1.1.0; STATUS.md has the evidence and SPEC.md "As built" lists where the build differs from the plan.
+
+| Item | What shipped | Live check |
+|---|---|---|
+| A1 | Reviewer subagents are routed at spawn to a model family other than the builder's (`harness.reviewDiversity`, `harness.reviewPool`) | S17 |
+| A2 | `advisor: true` on the developer; the advisor's brief inlines the human-approved artifacts | S18 |
+| A3 | Four shipped rules (no stubs, state files, read-only reviewers, evidence) plus rules derived from the method and the active scope | S19a, S19 |
+| A4 | The compaction summary is built from the workflow record; a stage boundary compacts past `harness.compactAtStageBoundary` | S9, S9b |
+| B1 | A core `project-checks` sensor running the commands in `aidlc/spaces/<space>/checkers.json`, and `/aidlc-checkers` to discover them | S20 |
+| B3 | `prewalk: true` on the developer; harness-native overrides | S21 |
+| B4 | Debugger-first diagnosis in a bugfix, held by a derived rule on the first source edit | S22 |
+| B2 | `ratchet/aidlc-method`: 15 cases with hidden tests, runner, grader, and an RPC driver for `/ratchet` | STATUS.md |

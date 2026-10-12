@@ -1,0 +1,7 @@
+{
+  "id": "ts-booking-days",
+  "tags": ["bugfix", "ts"],
+  "scope": "bugfix",
+  "request": "bookingDays() in src/dates.ts counts a booking from 2024-03-01 to 2024-03-03 as 2 days, but both the first and the last day count, so it is 3; `bun run test` fails. A booking that ends before it starts must throw a RangeError.",
+  "hidden": ["bun", "test", "./__hidden__/dates.check.ts"]
+}

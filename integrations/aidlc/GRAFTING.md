@@ -7,8 +7,9 @@ This guide applies the patch series in `patches/` to an AI-DLC source tree on an
 | Part | Where | Needed on the other machine |
 |---|---|---|
 | AI-DLC patch series | `patches/*.patch`, indexed in `patches/README.md` | Yes: this is the fork |
-| Coding Harness ≥ 1.1.0 | `coding-harness` monorepo (H1–H3, SPEC.md §7) | Yes: the distribution's adapter needs `resources_discover` with agent, rule and watchdog paths |
-| Helper scripts | `scripts/` | Optional: build, install and inventory helpers |
+| Coding Harness ≥ 1.1.0 | `coding-harness` monorepo (H1–H4, SPEC.md §7) | Yes: the adapter needs `resources_discover` with agent, rule and watchdog paths (H1–H3), and H4 lets the harness skill win over Claude Code's same-name skill in a project that carries both |
+| Helper scripts | `scripts/` | Optional: build, install, mirror and inventory helpers |
+| Ratchet kit | `ratchet/` | Optional: the AI-DLC method eval for the harness's `/ratchet` (not a patch; see `ratchet/aidlc-method/README.md`) |
 
 Each patch is one logical commit. `patches/README.md` lists every patch, its subject and the number of files it touches. SPEC.md §4 describes what each commit changes and how to verify it.
 
@@ -31,7 +32,7 @@ git am -3 /path/to/aidlc-harness/patches/*.patch
 ```
 Optional patches:
 - **Version.** If you version differently, stop before the last patch (`chore(release): 1.0.0`). Either run `git am --skip` when it comes up, or apply everything and then `git revert HEAD`. Your own `AIDLC_VERSION` and `CHANGELOG.md` heading then stay in charge.
-- **Improvements.** These (`feat(harness): … (A1)` … `(B2)`) are independent of each other and of the parity commits. You can drop any of them with `git am --skip`.
+- **Improvements.** The `(A1)` … `(B4)` commits come after the parity commits and can be dropped with `git am --skip`, but apply the ones you keep in order: several extend `harness/harness/host/adapter.ts` (B4's debug-first rule builds on A3's derived rules). `(B1)` is a core change: the `project-checks` sensor ships to every distribution.
 
 ### Conflict hotspots and how to resolve them
 The series follows one rule: **wherever upstream branches on a distribution name, the `harness` arm sits next to the `opencode` arm and behaves like it unless SPEC.md §4 says otherwise.** Resolve conflicts the same way:
@@ -45,6 +46,12 @@ The series follows one rule: **wherever upstream branches on a distribution name
 | `core/tools/aidlc-init.ts`, `aidlc-config-diagnostics.ts`, `aidlc-utility.ts` | Branch lists changed | Re-add the `harness` arm next to `opencode`; harness model access is harness-owned (no provider prompts) |
 | `core/tools/aidlc-usage.ts` | `readTranscript` changed | Keep the harness-signature check **before** the Claude `"message" in obj` sniff |
 | `core/hooks/aidlc-run-sensors.ts` | Hook body changed | Keep the `AIDLC_SENSOR_FEEDBACK` branch additive: no stdout change without the variable |
+| `core/aidlc-common/stages/construction/{code-generation,build-and-test}.md` | Your fork changed the `sensors:` list | Keep your list and add `project-checks` (B1) |
+| `core/tools/aidlc.ts`, `core/tools/aidlc-sensor.ts` | Your fork added a sensor | Keep both; B1 adds `project-checks` to `TOOLS`, `SENSOR_WORKERS`, the `__sensor-script` map, the import map, `SENSOR_HELP_SOURCES`, `BUNDLED_SENSOR_IDS` and the code-sensor check |
+| `tests/unit/gen-coverage-registry.test.ts` | `EXPECTED_NONE_TO_CLI` edited | Union of both lists; the harness entries are the `t-harness-*`, `t-rpc-harness-live`, `t-harness-coexistence-live` and `t-sensor-project-checks` files |
+| `tests/unit/t243-install-mechanism.test.ts` and the distribution manifests | Root-file legacy signatures | Keep your signatures and the 2.10.0 `AGENTS.md` signatures C09 records |
+| `tests/unit/t304-round18-acceptance-fixes.test.ts` (first-run detection fixture), `t93`, `t95`, `t227`, `t230`, `t239`, `README.md` tool count | Pinned inventories | Add `harness` (t304) and `project-checks` (the sensor inventories) to your lists and counts |
+| `harness/claude/skills/aidlc/SKILL.md` | Your fork changed the Claude orchestrator skill | The harness skill is derived from it and checked in: run `bun harness/harness/emit.ts --write-skill` and review the diff; packaging fails until the two agree |
 | `harness/harness/**` | none (new directory) | — |
 
 After every resolved patch:
@@ -73,10 +80,12 @@ Pass criteria:
 - the unit suite has no failures beyond those your fork already had (record your own baseline first);
 - the harness tests pass.
 
-Live journeys run the real harness and models:
+Live journeys run the real harness and models (Anthropic credential required):
 ```sh
-AIDLC_TUI_LIVE=1 bun tests/run-tests.ts --e2e --filter 'rpc-harness'
+AIDLC_HARNESS_RPC_LIVE=1 AIDLC_HARNESS_BIN=$(command -v harness) AIDLC_HARNESS_ANTHROPIC_KEY=... \
+  bun test --timeout=3700000 tests/e2e/t-rpc-harness-live.serial.test.ts
 ```
+Each scenario can run alone with `-t 'S20'`. S17 needs a local Ollama model with tool support, S22 `python3` with `venv` and network access for `pip install debugpy`.
 
 ## 5. Build, release, install
 ```sh
@@ -88,12 +97,12 @@ sh ../out/release/install.sh --from ../out/release                              
 - **Release heading.** `package-release.ts` requires a dated `## [<version>] - YYYY-MM-DD` heading in `CHANGELOG.md` for the version in `core/tools/aidlc-version.ts`.
 - **Update check.** A fork whose version sorts below the newest upstream release should disable the update check so `aidlc` does not nag or self-update to upstream:
   ```sh
-  aidlc config global set update-check false
+  aidlc system config global set update-check false
   ```
-  The value lives in `<install root>/update-check.json` (`core/tools/aidlc-machine-config.ts`).
+  The value lives in the machine settings file at the install root (`aidlc.settings.json`); `scripts/install.ts` in this repo sets it on every install.
 
 ## 6. Install Coding Harness ≥ 1.1.0 on that machine
-The distribution's bootstrap (`.harness/extensions/aidlc.ts`) loads the adapter, and the adapter relies on the H1–H3 extension seams. Build the harness from the `coding-harness` monorepo at a commit that includes them (CHANGELOG `1.1.0`), then confirm:
+The distribution's bootstrap (`.harness/extensions/aidlc.ts`) loads the adapter, and the adapter relies on the H1–H4 extension seams. Build the harness from the `coding-harness` monorepo at a commit that includes them (CHANGELOG `1.1.0`), then confirm:
 ```sh
 harness --version   # ≥ 1.1.0
 ```

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
 Date: Sun, 11 Oct 2026 23:27:07 +0100
-Subject: [PATCH 02/10] feat(core): register the harness distribution
+Subject: [PATCH 02/17] feat(core): register the harness distribution
 
 Coding Harness ships its engine in .harness-aidlc (the user's .harness/
 holds harness configuration). Teach runtime discovery, hook path

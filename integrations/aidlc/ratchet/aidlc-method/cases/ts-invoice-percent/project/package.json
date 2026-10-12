@@ -1,0 +1,6 @@
+{
+  "name": "invoice",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "bun test ./test/invoice.check.ts" }
+}

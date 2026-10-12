@@ -2,3 +2,5 @@ upstream/
 out/
 node_modules/
 *.log
+# Ratchet transcripts stay local; the flow's state, results and status are kept.
+.harness/ratchet/**/traces/

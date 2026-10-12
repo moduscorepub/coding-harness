@@ -1,0 +1,7 @@
+{
+  "id": "ts-page-count",
+  "tags": ["bugfix", "ts"],
+  "scope": "bugfix",
+  "request": "pageCount() in src/paging.ts drops the last partial page: pageCount(21, 10) returns 2 instead of 3, and `bun run test` fails. Zero items need zero pages; a non-positive perPage stays a RangeError.",
+  "hidden": ["bun", "test", "./__hidden__/paging.check.ts"]
+}

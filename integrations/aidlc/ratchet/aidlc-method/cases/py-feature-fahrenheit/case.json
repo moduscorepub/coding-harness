@@ -1,0 +1,7 @@
+{
+  "id": "py-feature-fahrenheit",
+  "tags": ["feature", "py"],
+  "scope": "express",
+  "request": "Add to_fahrenheit(celsius) to units/temperature.py, the inverse of to_celsius, rounded to one decimal place: to_fahrenheit(100) is 212.0 and to_fahrenheit(-40) is -40.0. A temperature below absolute zero (-273.15 C) raises ValueError. Cover it in the project's tests.",
+  "hidden": ["python3", "__hidden__/check_temperature.py"]
+}

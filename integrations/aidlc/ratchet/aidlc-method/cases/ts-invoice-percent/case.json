@@ -1,0 +1,7 @@
+{
+  "id": "ts-invoice-percent",
+  "tags": ["bugfix", "ts"],
+  "scope": "bugfix",
+  "request": "total() in src/invoice.ts subtracts the discount percentage as if it were cents: total([{ priceCents: 1500, qty: 2 }], 10) returns 2990 instead of 2700, and `bun run test` fails. Fix it so the discount is a whole-number percentage of the subtotal, with the discount amount rounded down to the cent.",
+  "hidden": ["bun", "test", "./__hidden__/invoice.check.ts"]
+}

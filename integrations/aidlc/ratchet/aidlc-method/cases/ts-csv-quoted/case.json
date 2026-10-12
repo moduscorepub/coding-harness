@@ -1,0 +1,7 @@
+{
+  "id": "ts-csv-quoted",
+  "tags": ["bugfix", "ts"],
+  "scope": "bugfix",
+  "request": "parseCsvLine() in src/csv.ts splits inside quoted fields: parseCsvLine('a,\"b,c\",d') returns ['a', '\"b', 'c\"', 'd'] instead of ['a', 'b,c', 'd'], and `bun run test` fails. A double-quoted field keeps its commas, its surrounding quotes are dropped, and a doubled quote inside it is one literal quote.",
+  "hidden": ["bun", "test", "./__hidden__/csv.check.ts"]
+}

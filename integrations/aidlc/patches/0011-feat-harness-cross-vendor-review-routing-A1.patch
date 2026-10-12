@@ -1,0 +1,469 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 05:16:02 +0100
+Subject: [PATCH 11/17] feat(harness): cross-vendor review routing (A1)
+
+---
+ core/tools/aidlc-settings.ts                |  57 +++++++++++
+ docs/guide/harnesses/coding-harness.md      |  29 ++++++
+ harness/harness/host/adapter.ts             | 102 +++++++++++++++++++-
+ tests/e2e/t-rpc-harness-live.serial.test.ts |  47 ++++++++-
+ tests/unit/t-harness-adapter-map.test.ts    |  55 ++++++++++-
+ 5 files changed, 283 insertions(+), 7 deletions(-)
+
+diff --git a/core/tools/aidlc-settings.ts b/core/tools/aidlc-settings.ts
+index 09c70349f576cfd7666d99e461828677790d5485..acec1b63a97d63c3d1d3e792d55a7993b8623040 100644
+--- a/core/tools/aidlc-settings.ts
++++ b/core/tools/aidlc-settings.ts
+@@ -58,10 +58,22 @@ export type SettingsModelPolicyRecord = Omit<ModelPolicyRecord, "agents"> & {
+   agents?: Record<string, SettingsModelAgentPolicy>;
+ };
+ 
++/** Coding Harness adapter behaviour; other distributions ignore it. */
++export type HarnessSettingsRecord = {
++  schemaVersion: 1;
++  /** Route reviewer subagents to a model family other than the builder's. */
++  reviewDiversity?: "auto" | "off";
++  /** Extra reviewer candidates (`provider/id` or a harness role such as `@slow`). */
++  reviewPool?: string[];
++  /** Compact at a stage boundary when context use is at least this percent; 0 disables. */
++  compactAtStageBoundary?: number;
++};
++
+ export type AidlcSettingsFile = {
+   $schema?: string;
+   schemaVersion: 1;
+   models?: SettingsModelPolicyRecord;
++  harness?: HarnessSettingsRecord;
+   flags?: ProjectFlagsRecord;
+   "update-check"?: boolean;
+   offline?: boolean;
+@@ -89,6 +101,7 @@ const TOP_LEVEL_KEYS = new Set([
+   "$schema",
+   "schemaVersion",
+   "models",
++  "harness",
+   "flags",
+   ...MACHINE_KEYS,
+ ]);
+@@ -101,6 +114,7 @@ const PROJECT_FLAG_KEYS = new Set([
+   "bypasses",
+ ]);
+ const MODEL_KEYS = new Set(["schemaVersion", "preset", "groups", "agents", "profiles"]);
++const HARNESS_KEYS = new Set(["schemaVersion", "reviewDiversity", "reviewPool", "compactAtStageBoundary"]);
+ const MODEL_GROUPS = ["deciding", "reviewing", "writing-up"] as const;
+ const MODEL_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+ const MODEL_PRESETS = ["thorough", "balanced", "minimal"] as const;
+@@ -317,6 +331,36 @@ export function normalizeSettingsModels(
+   return out;
+ }
+ 
++function normalizeHarnessSettings(value: unknown, where: string): HarnessSettingsRecord | undefined {
++  if (value === undefined) return undefined;
++  if (!isRecord(value)) throw new Error(`${where} must be an object`);
++  const unknown = Object.keys(value).filter((key) => !HARNESS_KEYS.has(key));
++  if (unknown.length > 0) throw new Error(`${where} contains unknown key(s): ${unknown.join(", ")}`);
++  if (value.schemaVersion !== 1) throw new Error(`${where}.schemaVersion must be 1`);
++  const out: HarnessSettingsRecord = { schemaVersion: 1 };
++  if (value.reviewDiversity !== undefined) {
++    if (value.reviewDiversity !== "auto" && value.reviewDiversity !== "off") {
++      throw new Error(`${where}.reviewDiversity must be auto or off`);
++    }
++    out.reviewDiversity = value.reviewDiversity;
++  }
++  if (value.reviewPool !== undefined) {
++    const pool = value.reviewPool;
++    if (!Array.isArray(pool) || pool.some((model) => typeof model !== "string" || !model.trim())) {
++      throw new Error(`${where}.reviewPool must be a list of model names`);
++    }
++    out.reviewPool = pool.map((model: string) => model.trim());
++  }
++  if (value.compactAtStageBoundary !== undefined) {
++    const percent = value.compactAtStageBoundary;
++    if (typeof percent !== "number" || !Number.isInteger(percent) || percent < 0 || percent > 100) {
++      throw new Error(`${where}.compactAtStageBoundary must be a whole percentage from 0 to 100`);
++    }
++    out.compactAtStageBoundary = percent;
++  }
++  return out;
++}
++
+ export function normalizeAidlcSettings(
+   value: unknown,
+   layer: SettingsLayer,
+@@ -370,11 +414,13 @@ export function normalizeAidlcSettings(
+     throw new Error(`${path}: settings.ca-bundle must be an absolute path`);
+   }
+   const models = normalizeSettingsModels(value.models, `${path}: models`);
++  const harness = normalizeHarnessSettings(value.harness, `${path}: harness`);
+   const flags = normalizeProjectFlagsRecord(value.flags, `${path}: flags`);
+   return {
+     ...(typeof value.$schema === "string" ? { $schema: value.$schema } : {}),
+     schemaVersion: 1,
+     ...(models ? { models } : {}),
++    ...(harness ? { harness } : {}),
+     ...(flags ? { flags } : {}),
+     ...(typeof value["update-check"] === "boolean"
+       ? { "update-check": value["update-check"] }
+@@ -725,6 +771,17 @@ export const AIDLC_SETTINGS_SCHEMA = {
+         },
+       },
+     },
++    harness: {
++      type: "object",
++      additionalProperties: false,
++      required: ["schemaVersion"],
++      properties: {
++        schemaVersion: { const: 1 },
++        reviewDiversity: { enum: ["auto", "off"] },
++        reviewPool: { type: "array", items: { type: "string", minLength: 1 } },
++        compactAtStageBoundary: { type: "integer", minimum: 0, maximum: 100 },
++      },
++    },
+     flags: {
+       type: "object",
+       additionalProperties: false,
+diff --git a/docs/guide/harnesses/coding-harness.md b/docs/guide/harnesses/coding-harness.md
+index b12d26ad4f738cb4056c8b3ade281fbb763343bf..48f355e558fa0ce43c9da87265b8df9f4d69a29c 100644
+--- a/docs/guide/harnesses/coding-harness.md
++++ b/docs/guide/harnesses/coding-harness.md
+@@ -110,6 +110,35 @@ fails open, as on the other harnesses.
+   `harness` target, then run `PLUGIN_ROOT=<built plugin> aidlc plugin sync`.
+   Plugin personas land in `.harness-aidlc/host/agents/` as task agents.
+ 
++## What Coding Harness adds
++
++These use harness capabilities other hosts lack. Each is on by default where it
++costs nothing, and a setting under `harness` in `aidlc.settings.json` (project,
++local, or machine layer) tunes it.
++
++### Cross-vendor review
++
++A reviewer (`aidlc-architecture-reviewer-agent`, `aidlc-product-lead-agent`,
++`aidlc-compliance-agent`, and any plugin `*-reviewer-agent`) is spawned on a
++model family other than the one doing the work, so it does not share the
++builder's blind spots. The adapter tries, in order, the reviewer's own models,
++`harness.reviewPool`, and the `@slow` and `@default` roles, and leads with the
++first that resolves to another family; the reviewer's own models stay behind it
++as fallbacks. When no configured model belongs to another family, nothing
++changes.
++
++```json
++{
++  "schemaVersion": 1,
++  "harness": { "schemaVersion": 1, "reviewPool": ["openai/gpt-5.5"] }
++}
++```
++
++Set `"reviewDiversity": "off"` to keep reviewers on the builder's model. To keep
++code inside a boundary (for example local models only for a client repository),
++disable the other providers for that path with Coding Harness's path-scoped
++`disabledProviders`; a reviewer never resolves to a disabled provider.
++
+ ## Alongside Claude Code
+ 
+ One project can carry both distributions: run `aidlc config --harness claude`
+diff --git a/harness/harness/host/adapter.ts b/harness/harness/host/adapter.ts
+index d2e116b55f5785e68ac69e4ca2b73f14900df376..5d1a08526b10da96a9015a6dd8bd2f6741b32812 100644
+--- a/harness/harness/host/adapter.ts
++++ b/harness/harness/host/adapter.ts
+@@ -30,8 +30,10 @@
+ //
+ // Beyond Claude parity, sensor verdicts reach the model as additional context
+ // (set AIDLC_HARNESS_SENSOR_FEEDBACK=0 to turn that off; audit rows are
+-// unchanged either way), and the AI-DLC method tree is injected into the system
+-// prompt from host/includes.json (the harness has no project include config).
++// unchanged either way), the AI-DLC method tree is injected into the system
++// prompt from host/includes.json (the harness has no project include config),
++// and reviewer subagents are routed to a model family other than the builder's
++// (`before_subagent_spawn`; AI-DLC setting harness.reviewDiversity).
+ 
+ import { spawn } from "node:child_process";
+ import { createHash } from "node:crypto";
+@@ -77,11 +79,21 @@ const ASK_TIMEOUT_CONTEXT =
+ 
+ export type HarnessAgentIdentity = { kind: "main" | "sub"; id: string; name: string };
+ 
++export type HarnessModel = { id: string; provider: string };
++
++/** The harness's read-only model facade (`ctx.models`). */
++export type HarnessModelQuery = {
++  current(): HarnessModel | undefined;
++  resolve(spec: string): HarnessModel | undefined;
++  family(model: HarnessModel): string;
++};
++
+ export type HarnessContext = {
+   cwd: string;
+   hasUI?: boolean;
+   agent?: HarnessAgentIdentity;
+   model?: { id?: string; name?: string; provider?: string };
++  models?: HarnessModelQuery;
+   sessionManager?: { getSessionFile?: () => string | undefined; getSessionId?: () => string };
+   ui?: {
+     setStatus?: (key: string, text: string | undefined) => void;
+@@ -461,6 +473,83 @@ export function execEngineViolation(toolName: string, input: Record<string, unkn
+   );
+ }
+ 
++// ---------------------------------------------------------------------------
++// AI-DLC `harness` settings (machine, then project, then local layer).
++// ---------------------------------------------------------------------------
++
++export type HarnessSettings = {
++  reviewDiversity?: "auto" | "off";
++  reviewPool?: string[];
++  compactAtStageBoundary?: number;
++};
++
++function machineSettingsFile(): string {
++  const explicit = process.env.AIDLC_INSTALL_ROOT?.trim();
++  const root = explicit
++    ? resolve(explicit)
++    : process.platform === "win32"
++      ? join(process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local"), "aidlc")
++      : join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "aidlc");
++  return join(root, "aidlc.settings.json");
++}
++
++/** The merged `harness` section; a layer that cannot be read contributes nothing (the doctor reports it). */
++export function readHarnessSettings(cwd: string, machineFile = machineSettingsFile()): HarnessSettings {
++  const merged: HarnessSettings = {};
++  for (const file of [machineFile, join(cwd, "aidlc.settings.json"), join(cwd, "aidlc.settings.local.json")]) {
++    try {
++      const section = (JSON.parse(readFileSync(file, "utf-8")) as { harness?: unknown }).harness;
++      if (!section || typeof section !== "object") continue;
++      const { reviewDiversity, reviewPool, compactAtStageBoundary } = section as Record<string, unknown>;
++      if (reviewDiversity === "auto" || reviewDiversity === "off") merged.reviewDiversity = reviewDiversity;
++      if (Array.isArray(reviewPool)) merged.reviewPool = reviewPool.filter((model): model is string => typeof model === "string");
++      if (typeof compactAtStageBoundary === "number") merged.compactAtStageBoundary = compactAtStageBoundary;
++    } catch {
++      // Absent or unreadable layer.
++    }
++  }
++  return merged;
++}
++
++// ---------------------------------------------------------------------------
++// Cross-vendor review: a reviewer runs on another model family than the builder.
++// ---------------------------------------------------------------------------
++
++const REVIEWER_AGENTS = new Set(["aidlc-product-lead-agent", "aidlc-compliance-agent"]);
++// Harness roles a user may point at another vendor; tried after the agent's own models and the pool.
++const REVIEW_ROLE_CANDIDATES = ["@slow", "@default"];
++
++export function isReviewerAgent(agent: string): boolean {
++  return REVIEWER_AGENTS.has(agent) || /-reviewer-agent$/.test(agent);
++}
++
++/**
++ * The spawn patterns for a reviewer: the first candidate whose model family
++ * differs from the builder's goes first, the original patterns stay behind it as
++ * the retry chain. Null when the agent is no reviewer, diversity is off, or no
++ * configured model belongs to another family.
++ */
++export function reviewerRouting(
++  agent: string,
++  patterns: readonly string[],
++  models: HarnessModelQuery,
++  settings: HarnessSettings,
++): { model: string[]; note: string } | null {
++  if (!isReviewerAgent(agent) || settings.reviewDiversity === "off") return null;
++  const builder = models.current();
++  if (!builder) return null;
++  const builderFamily = models.family(builder);
++  for (const spec of new Set([...patterns, ...(settings.reviewPool ?? []), ...REVIEW_ROLE_CANDIDATES])) {
++    const model = models.resolve(spec);
++    if (!model || models.family(model) === builderFamily) continue;
++    return {
++      model: [spec, ...patterns.filter((pattern) => pattern !== spec)],
++      note: `AI-DLC review on ${model.provider}/${model.id}, a different model family than the builder's ${builder.provider}/${builder.id}`,
++    };
++  }
++  return null;
++}
++
+ // ---------------------------------------------------------------------------
+ // Constitution: the AI-DLC method tree, injected into the system prompt.
+ // ---------------------------------------------------------------------------
+@@ -692,6 +781,15 @@ export default function aidlcHarnessAdapter(pi: HarnessExtensionApi, options: Ad
+     watchdogPaths: [`${UNPROJECTED_ENGINE_DIR}/host/watchdog/WATCHDOG.md`],
+   }));
+ 
++  pi.on("before_subagent_spawn", (event, ctx) => {
++    const agent = String(event.agent ?? "");
++    if (!isReviewerAgent(agent) || !ctx.models) return;
++    const patterns = Array.isArray(event.patterns) ? event.patterns.filter((pattern): pattern is string => typeof pattern === "string") : [];
++    const routed = reviewerRouting(agent, patterns, ctx.models, readHarnessSettings(ctx.cwd));
++    debugLog(ctx.cwd, { event: "before_subagent_spawn", agent, routed: routed?.model[0] ?? "no-alternate-vendor" });
++    return routed ?? undefined;
++  });
++
+   pi.on("session_start", async (event, ctx) => {
+     if (!isMain(ctx)) return;
+     // The conductor's own `aidlc …` commands resolve this distribution's tree even
+diff --git a/tests/e2e/t-rpc-harness-live.serial.test.ts b/tests/e2e/t-rpc-harness-live.serial.test.ts
+index 2dae06fc1f1ba0aebb5479008ade643020e7bf28..00c7fddebab585834d15426e0291c877daefe73c 100644
+--- a/tests/e2e/t-rpc-harness-live.serial.test.ts
++++ b/tests/e2e/t-rpc-harness-live.serial.test.ts
+@@ -53,6 +53,13 @@ const LIVE = process.env.AIDLC_HARNESS_RPC_LIVE === "1";
+ const BIN = process.env.AIDLC_HARNESS_BIN ?? Bun.which("harness") ?? "";
+ const KEY = process.env.AIDLC_HARNESS_ANTHROPIC_KEY ?? process.env.ANTHROPIC_API_KEY ?? "";
+ const MODEL = process.env.AIDLC_HARNESS_MODEL ?? "anthropic/claude-sonnet-5-5";
++// S17's second vendor: a local Ollama model with tool support, when installed.
++const OLLAMA_REVIEWER = (() => {
++  const model = process.env.AIDLC_HARNESS_REVIEW_MODEL ?? "ollama/qwen2.5-coder:0.5b";
++  if (!model.startsWith("ollama/")) return model;
++  const tags = spawnSync("curl", ["-sf", "--max-time", "2", "http://127.0.0.1:11434/api/tags"], { encoding: "utf-8" });
++  return tags.status === 0 && tags.stdout.includes(`"${model.slice("ollama/".length)}"`) ? model : "";
++})();
+ 
+ function binaryReady(): boolean {
+   if (!BIN || !existsSync(BIN)) return false;
+@@ -95,9 +102,13 @@ function seededProject(stage: string): string {
+   return dir;
+ }
+ 
+-function session(dir: string, ask?: AskPolicy): HarnessRpc {
++function agentDirectory(): string {
+   const agentDir = mkdtempSync(join(tmpdir(), "t-rpc-harness-agent-"));
+   scratch.push(agentDir);
++  return agentDir;
++}
++
++function session(dir: string, ask?: AskPolicy, agentDir = agentDirectory()): HarnessRpc {
+   return new HarnessRpc({
+     bin: BIN,
+     cwd: dir,
+@@ -277,6 +288,40 @@ describe("t-rpc-harness-live", () => {
+     10 * 60_000,
+   );
+ 
++  // A local Ollama model with tool support stands in for "another vendor".
++  (OLLAMA_REVIEWER ? live : test.skip)(
++    "S17: a reviewer subagent runs on a model family other than the builder's",
++    async () => {
++      const dir = project();
++      writeFileSync(
++        join(dir, "aidlc.settings.json"),
++        `${JSON.stringify({ schemaVersion: 1, harness: { schemaVersion: 1, reviewPool: [OLLAMA_REVIEWER] } }, null, 2)}\n`,
++      );
++      const agentDir = agentDirectory();
++      spawnSync(BIN, ["models", "refresh", "ollama"], { env: { ...process.env, PI_CODING_AGENT_DIR: agentDir }, encoding: "utf-8" });
++      const rpc = session(dir, undefined, agentDir);
++      await rpc.start();
++      await rpc.prompt(
++        "Call the task tool exactly once with agent `aidlc-architecture-reviewer-agent`, name `Review`, and the " +
++          "assignment `Reply with the word done.` Then stop.",
++        { stopWhen: (frame) => frame.type === "tool_execution_end" && frame.toolName === "task" },
++      );
++      const state = (await rpc.command({ type: "get_state" })).data as { sessionFile?: string };
++      await rpc.close();
++      const artifacts = String(state.sessionFile).replace(/\.jsonl$/, "");
++      const review = readdirSync(artifacts).find((name) => /^Review(-\d+)?\.jsonl$/.test(name));
++      expect(review, readdirSync(artifacts).join(", ")).toBeDefined();
++      const models = readFileSync(join(artifacts, review!), "utf-8")
++        .split("\n")
++        .filter(Boolean)
++        .map((line) => JSON.parse(line) as { type?: string; model?: string })
++        .filter((entry) => entry.type === "model_change")
++        .map((entry) => entry.model);
++      expect(models[0]).toBe(OLLAMA_REVIEWER);
++    },
++    10 * 60_000,
++  );
++
+   live(
+     "S12: an agent's configured thinking level is the level its spawned session runs at",
+     async () => {
+diff --git a/tests/unit/t-harness-adapter-map.test.ts b/tests/unit/t-harness-adapter-map.test.ts
+index 28f24288bac5ad080b1b95b882f90a73442b06c8..9e603c7e4d7ce4469c6758f73537aff854f6f235 100644
+--- a/tests/unit/t-harness-adapter-map.test.ts
++++ b/tests/unit/t-harness-adapter-map.test.ts
+@@ -5,7 +5,7 @@
+ // batch dispatch, and what never reaches a hook (main-only events in subagents,
+ // chained framework shell commands).
+ //
+-// covers: function:claudeCalls, function:taskItems, function:withTaskAssignments, function:withoutRecommended, function:askHookFields, function:bashBoundaryViolation, function:realPath, function:parseSensorFeedback, function:formatSensorFeedback, function:activeTodo
++// covers: function:claudeCalls, function:taskItems, function:withTaskAssignments, function:withoutRecommended, function:askHookFields, function:bashBoundaryViolation, function:realPath, function:parseSensorFeedback, function:formatSensorFeedback, function:activeTodo, function:reviewerRouting, function:readHarnessSettings
+ 
+ import { describe, expect, test } from "bun:test";
+ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+@@ -15,7 +15,11 @@ import aidlcHarnessAdapter, {
+   bashBoundaryViolation,
+   claudeCalls,
+   execEngineViolation,
++  type HarnessModel,
++  type HarnessModelQuery,
++  readHarnessSettings,
+   realPath,
++  reviewerRouting,
+   type CoreResult,
+ } from "../../harness/harness/host/adapter.ts";
+ 
+@@ -217,6 +221,49 @@ describe("tool_call", () => {
+   });
+ });
+ 
++describe("cross-vendor review", () => {
++  const catalog: Record<string, HarnessModel> = {
++    "anthropic/claude-sonnet-5-5": { provider: "anthropic", id: "claude-sonnet-5-5" },
++    "bedrock/claude-sonnet-5-5": { provider: "bedrock", id: "claude-sonnet-5-5" },
++    "ollama/qwen2.5-coder:0.5b": { provider: "ollama", id: "qwen2.5-coder:0.5b" },
++  };
++  const models: HarnessModelQuery = {
++    current: () => catalog["anthropic/claude-sonnet-5-5"],
++    resolve: (spec) => catalog[spec],
++    family: (model) => (model.id.startsWith("claude") ? "claude" : model.id),
++  };
++
++  test("a reviewer leads with the first configured model of another family and keeps its own as fallbacks", () => {
++    const routed = reviewerRouting(
++      "aidlc-architecture-reviewer-agent",
++      ["anthropic/claude-sonnet-5-5"],
++      models,
++      { reviewPool: ["bedrock/claude-sonnet-5-5", "ollama/qwen2.5-coder:0.5b"] },
++    );
++    expect(routed?.model).toEqual(["ollama/qwen2.5-coder:0.5b", "anthropic/claude-sonnet-5-5"]);
++  });
++
++  test("nothing changes for a builder agent, with diversity off, or when every candidate shares the builder's family", () => {
++    const pool = { reviewPool: ["ollama/qwen2.5-coder:0.5b"] };
++    expect(reviewerRouting("aidlc-developer-agent", [], models, pool)).toBeNull();
++    expect(reviewerRouting("aidlc-product-lead-agent", [], models, { ...pool, reviewDiversity: "off" })).toBeNull();
++    expect(reviewerRouting("aidlc-compliance-agent", ["bedrock/claude-sonnet-5-5"], models, {})).toBeNull();
++  });
++
++  test("the harness settings section merges machine, then project, then local", () => {
++    const dir = mkdtempSync(join(tmpdir(), "t-harness-settings-"));
++    try {
++      const machine = join(dir, "machine.json");
++      writeFileSync(machine, JSON.stringify({ schemaVersion: 1, harness: { schemaVersion: 1, reviewPool: ["a"], compactAtStageBoundary: 30 } }));
++      writeFileSync(join(dir, "aidlc.settings.json"), JSON.stringify({ schemaVersion: 1, harness: { schemaVersion: 1, reviewPool: ["b"] } }));
++      writeFileSync(join(dir, "aidlc.settings.local.json"), JSON.stringify({ schemaVersion: 1, harness: { schemaVersion: 1, reviewDiversity: "off" } }));
++      expect(readHarnessSettings(dir, machine)).toEqual({ reviewPool: ["b"], compactAtStageBoundary: 30, reviewDiversity: "off" });
++    } finally {
++      rmSync(dir, { recursive: true, force: true });
++    }
++  });
++});
++
+ describe("tool_result", () => {
+   test("an answered ask reaches record-human-turn with each question's own answer", async () => {
+     const { emit, calls } = load();
+@@ -295,12 +342,12 @@ describe("main-session lifecycle", () => {
+     try {
+       delete process.env.AIDLC_HARNESS_DIR;
+       delete process.env.AIDLC_HARNESS_NAME;
++      const identity = () => ({ dir: process.env.AIDLC_HARNESS_DIR, name: process.env.AIDLC_HARNESS_NAME });
+       const { emit } = load();
+       await emit("session_start", { reason: "startup" }, "sub");
+-      expect(process.env.AIDLC_HARNESS_DIR).toBeUndefined();
++      expect(identity()).toEqual({ dir: undefined, name: undefined });
+       await emit("session_start", { reason: "startup" });
+-      expect(process.env.AIDLC_HARNESS_DIR).toBe(".harness-aidlc");
+-      expect(process.env.AIDLC_HARNESS_NAME).toBe("harness");
++      expect(identity()).toEqual({ dir: ".harness-aidlc", name: "harness" });
+     } finally {
+       for (const [key, value] of [
+         ["AIDLC_HARNESS_DIR", saved.dir],

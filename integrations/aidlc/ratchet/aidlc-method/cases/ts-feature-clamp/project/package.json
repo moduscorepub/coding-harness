@@ -1,0 +1,6 @@
+{
+  "name": "mathlib",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "bun test ./test/math.check.ts" }
+}

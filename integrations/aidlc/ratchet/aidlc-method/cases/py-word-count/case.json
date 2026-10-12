@@ -1,0 +1,7 @@
+{
+  "id": "py-word-count",
+  "tags": ["bugfix", "py"],
+  "scope": "bugfix",
+  "request": "word_count() in wordsmith/words.py counts empty strings: word_count('hello   world') returns 4 instead of 2 and word_count('') returns 1 instead of 0; `python3 -m unittest tests/check_words.py` fails. Any run of whitespace (spaces, tabs, newlines) separates words.",
+  "hidden": ["python3", "__hidden__/check_words.py"]
+}

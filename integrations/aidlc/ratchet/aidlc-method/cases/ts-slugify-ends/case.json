@@ -1,0 +1,7 @@
+{
+  "id": "ts-slugify-ends",
+  "tags": ["bugfix", "ts"],
+  "scope": "bugfix",
+  "request": "slugify() in src/slug.ts leaves hyphens at the ends: slugify('  Hello, World! ') returns '-hello-world-' instead of 'hello-world', and `bun run test` fails. A slug never starts or ends with a hyphen.",
+  "hidden": ["bun", "test", "./__hidden__/slug.check.ts"]
+}

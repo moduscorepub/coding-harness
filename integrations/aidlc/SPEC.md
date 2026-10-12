@@ -12,6 +12,32 @@ Progress, deviations and evidence live in `STATUS.md`. Grafting onto another AI-
 
 ---
 
+## As built
+
+Where the build differs from the plan below. `STATUS.md` records the evidence for each row.
+
+| Spec | As built | Why |
+|---|---|---|
+| D-HOST: harness ≥ 1.1.0 with H1–H3 | harness ≥ 1.1.0 with H1–H4. H4: a skill an extension contributes replaces another tool's skill of the same name | With the Claude distribution in the same project, Claude's `/aidlc` skill shadowed the harness one |
+| §4 C03: tiers map to `@slow`, `@default`, `@smol` | Every tier projects `model: null` (the agent inherits the session model); `balanced` projects `thinkingLevel: medium` | Model access is harness-owned; reviewer routing comes from A1 at spawn time |
+| §5.1–5.2: a `bootstrap.ts` source and a `harnessFiles` row | `emit.ts` writes `.harness/extensions/aidlc.ts` from a constant | The bootstrap is one re-export line |
+| §5.3: the skill is derived at emit time | Checked in as `harness/harness/skills/aidlc/SKILL.md`; packaging fails when it drifts from the Claude skill; `bun harness/harness/emit.ts --write-skill` regenerates it | Upstream tests read every distribution's authored skill |
+| §6: execution tools go through the guards | `eval`, `debug`, `ssh`, `recipe`, `vibe_spawn` and `vibe_send` are refused when their input invokes the engine; otherwise `plan-approval-guard` sees them as opaque tools | Live runs showed the conductor driving the engine from `eval` |
+| D-SNS: verdicts in the tool result | Delivered as a context message after the tool batch | The harness's `additionalContext` contract |
+| §9 A1: `models.reviewDiversity`, `models.reviewDiversityPool` | A `harness` settings section: `{schemaVersion, reviewDiversity, reviewPool, compactAtStageBoundary}` | Settings are strict-key validated; other distributions ignore the section |
+| §9 A2: a state watchdog context | `<record>/.aidlc-engine/harness/WATCHDOG.md`, which inlines the approved artifacts by `@` import within 24 KiB and lists the rest | The harness keeps only extension files named `WATCHDOG.md`; in a live run the advisor did not open listed files |
+| §9 A3: the state-files rule covers `aidlc/**` | Only the engine-owned files: `aidlc-state.md`, the intent registry, the active-intent pointer, audit shards | `aidlc/**` would refuse the conductor's own artifact writes |
+| §9 A3: derived rules in a state dir | `aidlc/.aidlc-sessions/harness/rules/`: a no-mocks rule from method lines that rule out mocks, and (B4) a debug-first rule while the active scope is `bugfix` | — |
+| §9 A4: the summary from `orchestrate status` | Built from the record (state fields, active-directive marker, approved artifacts, open questions, audit decisions, file operations), the engine's SessionStart `compact` context, and the human's last three messages; focus text keeps the harness summary | There is no `orchestrate status`; live S9b showed that without the human's request the resumed run started workflow work |
+| §9 A4: trigger on a state-transition `tool_result` | At `turn_end`, when the state's current stage changed | The same signal without parsing tool results |
+| §9 B1: `checkers.json` as a bare array, parsers `eslint-json`, `tsc`, `ruff-json`, `generic-exit` | `{schemaVersion: 1, checkers: [{label, command (argv), cwd?, matches?, parser: eslint \| ruff \| generic \| exit-code, timeoutSeconds?}]}`; the manifest matches source extensions instead of `**/*` | Aligned with the harness cleanse discovery contract (argv commands, its parser ids; `generic` covers `tsc --pretty false`); `**/*` fired on every record write |
+| §9 B1: `/aidlc-checkers` through `ctx.runEphemeralTurn` | A prompt template, `host/prompts/aidlc-checkers.md` | A side turn executes no tool calls, and discovery must run each command |
+| §9 B3: `harness.prewalk` and `harness.prewalkConductor` settings | `prewalk: true` on the developer; overrides through the harness's `task.agentPrewalk`; the conductor through `prewalk.enabled` | The harness already owns these switches |
+| §9 B4: skill text only | Skill text, developer-agent body text, and the derived debug-first rule | Live S22: with text alone the agents fixed the defect without the debugger |
+| §9 B2: change paths include `harness/harness/skills/**`; an interactive TUI drives `/ratchet` | Change paths: the developer agent, `host/rules`, `host/watchdog/WATCHDOG.md`; `ratchet/drive.ts` drives `/ratchet` over RPC and answers its dialogs | The skill is drift-guarded; the build machine has no tmux |
+
+---
+
 ## 0. Decisions
 
 | ID | Decision | Rationale |
@@ -144,6 +170,8 @@ Files and changes:
     | deciding | `["@slow"]` | `high` |
     | reviewing | `["@default"]` | `medium` |
     | writing-up | `["@smol"]` | `low` |
+
+    (As built, no tier pins a model; see "As built" above.)
 
   - plus any other tiers present, mirroring their claude column's intent.
 - **`core/tools/aidlc-model-policy.ts`:**

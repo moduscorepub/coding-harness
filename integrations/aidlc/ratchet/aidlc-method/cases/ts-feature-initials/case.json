@@ -1,0 +1,7 @@
+{
+  "id": "ts-feature-initials",
+  "tags": ["feature", "ts"],
+  "scope": "express",
+  "request": "Add an exported initials(name) to src/names.ts: the uppercase first letter of each word of the name, so initials('ada lovelace') is 'AL' and initials('  Grace  Brewster Hopper ') is 'GBH'. An empty or blank name gives ''. Cover it in the project's tests.",
+  "hidden": ["bun", "test", "./__hidden__/initials.check.ts"]
+}

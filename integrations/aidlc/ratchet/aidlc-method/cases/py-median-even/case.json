@@ -1,0 +1,7 @@
+{
+  "id": "py-median-even",
+  "tags": ["bugfix", "py"],
+  "scope": "bugfix",
+  "request": "median() in metrics/median.py returns the upper middle value for an even count: median([1, 2, 3, 4]) returns 3 instead of 2.5; `python3 -m unittest tests/check_median.py` fails. The median of an empty list is an error: raise ValueError.",
+  "hidden": ["python3", "__hidden__/check_median.py"]
+}

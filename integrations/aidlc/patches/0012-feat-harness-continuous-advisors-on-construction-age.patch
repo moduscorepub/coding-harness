@@ -1,0 +1,415 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 05:32:06 +0100
+Subject: [PATCH 12/17] feat(harness): continuous advisors on construction
+ agents (A2)
+
+---
+ docs/guide/harnesses/coding-harness.md      |  16 +++
+ harness/harness/emit.ts                     |  13 ++-
+ harness/harness/host/adapter.ts             | 118 ++++++++++++++++++--
+ harness/harness/host/watchdog/WATCHDOG.md   |  20 ++++
+ tests/e2e/t-rpc-harness-live.serial.test.ts |  43 +++++++
+ tests/unit/t-harness-adapter-map.test.ts    |  50 ++++++++-
+ tests/unit/t-harness-emit.test.ts           |  11 ++
+ 7 files changed, 258 insertions(+), 13 deletions(-)
+ create mode 100644 harness/harness/host/watchdog/WATCHDOG.md
+
+diff --git a/docs/guide/harnesses/coding-harness.md b/docs/guide/harnesses/coding-harness.md
+index 48f355e558fa0ce43c9da87265b8df9f4d69a29c..da9753d8a836d1ad70aac63b1270fd2e238722b4 100644
+--- a/docs/guide/harnesses/coding-harness.md
++++ b/docs/guide/harnesses/coding-harness.md
+@@ -139,6 +139,22 @@ code inside a boundary (for example local models only for a client repository),
+ disable the other providers for that path with Coding Harness's path-scoped
+ `disabledProviders`; a reviewer never resolves to a disabled provider.
+ 
++### Continuous advisor on construction
++
++`aidlc-developer-agent` carries `advisor: true`, so when Coding Harness's
++advisor subsystem is on (`advisor.enabled: true`) a second model watches the
++developer turn by turn instead of waiting for the stage gate. It reviews against
++what the human approved: the adapter contributes `.harness-aidlc/host/watchdog/WATCHDOG.md`
++(the review brief) and, while a workflow is active, a generated
++`<record>/.aidlc-engine/harness/WATCHDOG.md` that inlines the approved stages'
++artifacts (up to 24 KiB; larger ones are listed by path for the advisor to read).
++When a change does what its assignment says but contradicts an approved artifact,
++the advisor names the artifact and section.
++
++The advisor runs on Coding Harness's `advisor` model role; point that role at
++another vendor to combine this with cross-vendor review. `task.agentAdvisor`
++turns it off or picks a model per agent.
++
+ ## Alongside Claude Code
+ 
+ One project can carry both distributions: run `aidlc config --harness claude`
+diff --git a/harness/harness/emit.ts b/harness/harness/emit.ts
+index cdab7b12b16d17a0dfe93772a9b5abeb62d07aab..23f5c2a138745cb95d51f1b3395c01fe2f105691 100644
+--- a/harness/harness/emit.ts
++++ b/harness/harness/emit.ts
+@@ -39,6 +39,14 @@ const BOOTSTRAP = `// AI-DLC bootstrap for Coding Harness. Managed by AI-DLC as
+ export { default } from "../../{{HARNESS_DIR}}/host/adapter.ts";
+ `;
+ 
++// Harness-native frontmatter a persona gains on this host, keyed by the short
++// agent name. The harness owns the switches (`advisor.enabled`, per-agent
++// overrides), so these only declare intent.
++const HOST_AGENT_KEYS: Record<string, string[]> = {
++  // A continuous advisor reviews construction turn by turn against the approved artifacts.
++  developer: ["advisor: true"],
++};
++
+ // Rewrite a core persona .md into its harness task-agent twin.
+ function emitAgentMd(raw: string, srcPath: string, tierCap: EmitContext["tierCap"]): string {
+   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+@@ -51,12 +59,13 @@ function emitAgentMd(raw: string, srcPath: string, tierCap: EmitContext["tierCap
+   if (disallowedMatch && !/^Task$/i.test(disallowedMatch[1])) {
+     throw new Error(`${srcPath}: harness emission cannot project disallowedTools: ${disallowedMatch[1]}.`);
+   }
+-  const effective = resolveModelPolicy(null, modelAgentName(srcPath), tierMatch[1] as Tier, "harness", tierCap);
++  const agentName = modelAgentName(srcPath);
++  const effective = resolveModelPolicy(null, agentName, tierMatch[1] as Tier, "harness", tierCap);
+   return writeMarkdownAgentSurface(raw, effective, {
+     effortKey: "thinkingLevel",
+     // The harness has no per-agent turn cap; the persona's Turn Budget prose carries the guidance.
+     removeKeys: ["disallowedTools", "maxTurns", "thinking", "spawns"],
+-    afterProjectionLines: disallowedMatch ? ["spawns: []"] : [],
++    afterProjectionLines: [...(disallowedMatch ? ["spawns: []"] : []), ...(HOST_AGENT_KEYS[agentName] ?? [])],
+   });
+ }
+ 
+diff --git a/harness/harness/host/adapter.ts b/harness/harness/host/adapter.ts
+index 5d1a08526b10da96a9015a6dd8bd2f6741b32812..d72db8674c4b487cfa3847089af26d4cfb577903 100644
+--- a/harness/harness/host/adapter.ts
++++ b/harness/harness/host/adapter.ts
+@@ -37,9 +37,9 @@
+ 
+ import { spawn } from "node:child_process";
+ import { createHash } from "node:crypto";
+-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
++import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+ import { homedir } from "node:os";
+-import { dirname, isAbsolute, join, resolve } from "node:path";
++import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+ 
+ export const ENGINE_DIR = "{{HARNESS_DIR}}";
+ const PROJECTED_INVOKE = "{{INVOKE}}";
+@@ -550,6 +550,102 @@ export function reviewerRouting(
+   return null;
+ }
+ 
++// ---------------------------------------------------------------------------
++// Advisor context: the active intent's human-approved artifacts.
++// ---------------------------------------------------------------------------
++
++// Initialization stages auto-proceed; nothing in them was approved by a human.
++const APPROVED_PHASE_DIRS = ["ideation", "inception", "construction", "operation"];
++
++/** The active intent's record directory, or null when no workflow is active. */
++export function activeRecordDir(cwd: string): string | null {
++  try {
++    const spaceFile = join(cwd, "aidlc", "active-space");
++    const space = (existsSync(spaceFile) ? readFileSync(spaceFile, "utf-8").trim() : "") || "default";
++    const intents = join(cwd, "aidlc", "spaces", space, "intents");
++    const name = readFileSync(join(intents, "active-intent"), "utf-8").trim();
++    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) return null;
++    const record = join(intents, name);
++    return existsSync(join(record, "aidlc-state.md")) ? record : null;
++  } catch {
++    return null;
++  }
++}
++
++/** Artifacts of the stages the human approved, project-relative: no question files, diaries or reviews. */
++export function approvedArtifacts(cwd: string, record: string): string[] {
++  const state = readFileSync(join(record, "aidlc-state.md"), "utf-8");
++  const approved = new Set([...state.matchAll(/^- \[x\] ([a-z0-9-]+) —/gm)].map((match) => match[1]));
++  const out: string[] = [];
++  const collect = (dir: string): void => {
++    for (const entry of readdirSync(dir, { withFileTypes: true })) {
++      const full = join(dir, entry.name);
++      if (entry.isDirectory()) {
++        if (entry.name !== "reviews") collect(full);
++      } else if (entry.name.endsWith(".md") && !entry.name.endsWith("-questions.md") && entry.name !== "memory.md") {
++        out.push(relative(cwd, full));
++      }
++    }
++  };
++  for (const phase of APPROVED_PHASE_DIRS) {
++    const phaseDir = join(record, phase);
++    if (!existsSync(phaseDir)) continue;
++    for (const entry of readdirSync(phaseDir, { withFileTypes: true })) {
++      if (!entry.isDirectory()) continue;
++      if (approved.has(entry.name)) collect(join(phaseDir, entry.name));
++      else if (phase === "construction") {
++        // Per-unit construction stages live under <unit>/<stage>/.
++        for (const stage of approved) {
++          const unitStage = join(phaseDir, entry.name, stage);
++          if (existsSync(unitStage)) collect(unitStage);
++        }
++      }
++    }
++  }
++  return out.sort();
++}
++
++// Approved artifacts inlined into the advisor prompt (by `@` import) up to this
++// many bytes; the rest are listed for the advisor to read when a change touches them.
++const WATCHDOG_INLINE_BYTES = 24 * 1024;
++
++/** Write the advisor context for the active intent (only when it changed); its path, or null without a workflow. */
++export function writeWatchdogContext(cwd: string): string | null {
++  const record = activeRecordDir(cwd);
++  if (!record) return null;
++  const state = readFileSync(join(record, "aidlc-state.md"), "utf-8");
++  const stage = /^- \*\*Current Stage\*\*:\s*(\S+)/m.exec(state)?.[1] ?? "unknown";
++  // Advisor discovery keeps extension files named WATCHDOG.md only.
++  const file = join(record, ".aidlc-engine", "harness", "WATCHDOG.md");
++  const inlined: string[] = [];
++  const listed: string[] = [];
++  let budget = WATCHDOG_INLINE_BYTES;
++  for (const path of approvedArtifacts(cwd, record)) {
++    const size = statSync(join(cwd, path)).size;
++    if (size <= budget) {
++      budget -= size;
++      inlined.push(`### ${path}\n\n@${relative(dirname(file), join(cwd, path))}\n`);
++    } else {
++      listed.push(`- \`${path}\``);
++    }
++  }
++  const text =
++    `# AI-DLC watchdog context\n\nActive intent \`${relative(cwd, record)}\`, current stage \`${stage}\`.\n\n` +
++    (inlined.length + listed.length === 0
++      ? "No stage has been approved yet.\n"
++      : `## Human-approved artifacts\n\n${inlined.join("\n")}` +
++        (listed.length > 0 ? `\nMore approved artifacts; read the ones a change touches:\n\n${listed.join("\n")}\n` : ""));
++  try {
++    if (!existsSync(file) || readFileSync(file, "utf-8") !== text) {
++      mkdirSync(dirname(file), { recursive: true });
++      writeFileSync(file, text);
++    }
++    return file;
++  } catch {
++    return null;
++  }
++}
++
+ // ---------------------------------------------------------------------------
+ // Constitution: the AI-DLC method tree, injected into the system prompt.
+ // ---------------------------------------------------------------------------
+@@ -773,13 +869,17 @@ export default function aidlcHarnessAdapter(pi: HarnessExtensionApi, options: Ad
+     }, STATUSLINE_DEBOUNCE_MS);
+   };
+ 
+-  pi.on("resources_discover", () => ({
+-    skillPaths: [`${UNPROJECTED_ENGINE_DIR}/skills`],
+-    promptPaths: [`${UNPROJECTED_ENGINE_DIR}/host/prompts`],
+-    agentPaths: [`${UNPROJECTED_ENGINE_DIR}/host/agents`],
+-    rulePaths: [`${UNPROJECTED_ENGINE_DIR}/host/rules`],
+-    watchdogPaths: [`${UNPROJECTED_ENGINE_DIR}/host/watchdog/WATCHDOG.md`],
+-  }));
++  pi.on("resources_discover", (event, ctx) => {
++    // Subagent sessions rerun discovery, so an advisor sees the approvals as of its spawn.
++    const context = writeWatchdogContext(typeof event.cwd === "string" ? event.cwd : ctx.cwd);
++    return {
++      skillPaths: [`${UNPROJECTED_ENGINE_DIR}/skills`],
++      promptPaths: [`${UNPROJECTED_ENGINE_DIR}/host/prompts`],
++      agentPaths: [`${UNPROJECTED_ENGINE_DIR}/host/agents`],
++      rulePaths: [`${UNPROJECTED_ENGINE_DIR}/host/rules`],
++      watchdogPaths: [`${UNPROJECTED_ENGINE_DIR}/host/watchdog/WATCHDOG.md`, ...(context ? [context] : [])],
++    };
++  });
+ 
+   pi.on("before_subagent_spawn", (event, ctx) => {
+     const agent = String(event.agent ?? "");
+diff --git a/harness/harness/host/watchdog/WATCHDOG.md b/harness/harness/host/watchdog/WATCHDOG.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..92c42daa4024bd0e3508a1fcfdfd65ebee9aee72
+--- /dev/null
++++ b/harness/harness/host/watchdog/WATCHDOG.md
+@@ -0,0 +1,20 @@
++# AI-DLC construction review
++
++You are watching an AI-DLC agent build what a human approved. The approved
++artifacts are listed in the AI-DLC watchdog context that accompanies this file;
++when there is none, no workflow is active and only general review applies.
++
++- Check each change against the human-approved artifacts it touches:
++  requirements, design, non-functional requirements, and the test strategy.
++  Read the artifact before you rely on it.
++- Flag a deviation from what was approved: behaviour the requirements do not
++  ask for, code that contradicts a design decision, a missed non-functional
++  requirement, tests the strategy calls for that the change lacks, or mocks and
++  stubs the strategy rules out.
++- The approved artifacts are the human's decisions and outrank an assignment:
++  when a change does what it was told but contradicts an approved artifact,
++  flag the contradiction so the human can resolve it.
++- Cite the artifact path and the section your concern rests on.
++- Stay silent unless you have evidence. Do not restate the plan, praise the
++  work, or comment on matters the artifacts do not cover.
++- Never approve or change workflow state; the human decides at the gate.
+diff --git a/tests/e2e/t-rpc-harness-live.serial.test.ts b/tests/e2e/t-rpc-harness-live.serial.test.ts
+index 00c7fddebab585834d15426e0291c877daefe73c..6f92a47600f50a0a60ab687a4577a1c7c7b7baa4 100644
+--- a/tests/e2e/t-rpc-harness-live.serial.test.ts
++++ b/tests/e2e/t-rpc-harness-live.serial.test.ts
+@@ -72,6 +72,10 @@ const ENABLED = LIVE && KEY !== "" && binaryReady() && existsSync(DIST);
+ const live = ENABLED ? test : test.skip;
+ const scratch: string[] = [];
+ afterAll(() => {
++  if (process.env.AIDLC_KEEP_TEMP === "1") {
++    console.log(`kept: ${scratch.join(" ")}`);
++    return;
++  }
+   for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
+ });
+ 
+@@ -288,6 +292,45 @@ describe("t-rpc-harness-live", () => {
+     10 * 60_000,
+   );
+ 
++  live(
++    "S18: a dispatched developer is advised against the human-approved artifacts",
++    async () => {
++      const dir = seededProject("requirements-analysis");
++      const approved = join(seededRecordDir(dir), "ideation", "scope-definition", "scope.md");
++      mkdirSync(join(approved, ".."), { recursive: true });
++      writeFileSync(approved, "# Scope\n\n## Constraints\n\nMoney is integer cents; never divide money with floating point.\n");
++      const agentDir = agentDirectory();
++      writeFileSync(join(agentDir, "config.yml"), "advisor:\n  enabled: true\n");
++      const rpc = session(dir, undefined, agentDir);
++      await rpc.start();
++      // Steps after the write give the advisor a review turn on it before the developer finishes.
++      await rpc.prompt(
++        "Call the task tool exactly once with agent `aidlc-developer-agent`, name `Build`, and the assignment " +
++          "`Step 1: create src/price.ts exporting half(cents: number) that returns cents / 2. Step 2: read src/price.ts " +
++          "back. Step 3: run bun -e \"import('./src/price.ts').then(m => console.log(m.half(5)))\". Step 4: report the " +
++          "output and any advice you received, then reply done.` Then stop.",
++        { stopWhen: (frame) => frame.type === "tool_execution_end" && frame.toolName === "task" },
++      );
++      const state = (await rpc.command({ type: "get_state" })).data as { sessionFile?: string };
++      await rpc.close();
++      const artifacts = String(state.sessionFile).replace(/\.jsonl$/, "");
++      const advisor = readdirSync(artifacts, { recursive: true })
++        .map(String)
++        .find((name) => name.includes("Build") && /__advisor(\.[^/]+)?\.jsonl$/.test(name));
++      expect(advisor, readdirSync(artifacts, { recursive: true }).join(", ")).toBeDefined();
++      // The advisor reviewed the write against the approved artifact that rules it out, and cited it.
++      const notes = readFileSync(join(artifacts, advisor!), "utf-8")
++        .split("\n")
++        .filter(Boolean)
++        .map((line) => JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } })
++        .filter((entry) => entry.type === "message" && entry.message?.role === "assistant")
++        .map((entry) => JSON.stringify(entry.message?.content ?? ""))
++        .join("\n");
++      expect(notes).toContain("scope.md");
++    },
++    10 * 60_000,
++  );
++
+   // A local Ollama model with tool support stands in for "another vendor".
+   (OLLAMA_REVIEWER ? live : test.skip)(
+     "S17: a reviewer subagent runs on a model family other than the builder's",
+diff --git a/tests/unit/t-harness-adapter-map.test.ts b/tests/unit/t-harness-adapter-map.test.ts
+index 9e603c7e4d7ce4469c6758f73537aff854f6f235..1c3cc51116bf24ad911b0cf5112e2cb07703f7fe 100644
+--- a/tests/unit/t-harness-adapter-map.test.ts
++++ b/tests/unit/t-harness-adapter-map.test.ts
+@@ -5,10 +5,10 @@
+ // batch dispatch, and what never reaches a hook (main-only events in subagents,
+ // chained framework shell commands).
+ //
+-// covers: function:claudeCalls, function:taskItems, function:withTaskAssignments, function:withoutRecommended, function:askHookFields, function:bashBoundaryViolation, function:realPath, function:parseSensorFeedback, function:formatSensorFeedback, function:activeTodo, function:reviewerRouting, function:readHarnessSettings
++// covers: function:claudeCalls, function:taskItems, function:withTaskAssignments, function:withoutRecommended, function:askHookFields, function:bashBoundaryViolation, function:realPath, function:parseSensorFeedback, function:formatSensorFeedback, function:activeTodo, function:reviewerRouting, function:readHarnessSettings, function:approvedArtifacts, function:writeWatchdogContext
+ 
+ import { describe, expect, test } from "bun:test";
+-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
++import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+ import aidlcHarnessAdapter, {
+@@ -21,6 +21,7 @@ import aidlcHarnessAdapter, {
+   realPath,
+   reviewerRouting,
+   type CoreResult,
++  writeWatchdogContext,
+ } from "../../harness/harness/host/adapter.ts";
+ 
+ type Handler = (event: Record<string, unknown>, ctx: Record<string, unknown>) => unknown;
+@@ -264,6 +265,51 @@ describe("cross-vendor review", () => {
+   });
+ });
+ 
++describe("advisor context", () => {
++  test("lists the approved stages' artifacts only, and the resources a session discovers include it", async () => {
++    const dir = mkdtempSync(join(tmpdir(), "t-harness-watchdog-"));
++    try {
++      const intents = join(dir, "aidlc", "spaces", "default", "intents");
++      const record = join(intents, "261012-fix");
++      const write = (path: string, text = "x\n") => {
++        mkdirSync(join(path, ".."), { recursive: true });
++        writeFileSync(path, text);
++      };
++      write(join(intents, "active-intent"), "261012-fix\n");
++      write(
++        join(record, "aidlc-state.md"),
++        "- **Current Stage**: code-generation\n- [x] state-init — EXECUTE\n- [x] requirements-analysis — EXECUTE\n- [-] code-generation — EXECUTE\n",
++      );
++      write(join(record, "initialization", "state-init", "notes.md"));
++      write(join(record, "inception", "requirements-analysis", "requirements.md"));
++      // Past the inline budget: listed for the advisor to read, not inlined.
++      write(join(record, "inception", "requirements-analysis", "appendix.md"), "x".repeat(30 * 1024));
++      write(join(record, "inception", "requirements-analysis", "requirements-analysis-questions.md"));
++      write(join(record, "inception", "requirements-analysis", "memory.md"));
++      write(join(record, "inception", "requirements-analysis", "reviews", "iteration-1.md"));
++      write(join(record, "construction", "code-generation", "code-generation-plan.md"));
++
++      const file = writeWatchdogContext(dir);
++      expect(file).toBe(join(record, ".aidlc-engine", "harness", "WATCHDOG.md"));
++      const text = readFileSync(String(file), "utf-8");
++      expect(text).toContain("current stage `code-generation`");
++      // Each approved artifact once: inlined by an `@` import relative to the context file, or listed.
++      expect([...text.matchAll(/^@(.+)$/gm)].map((match) => match[1])).toEqual([
++        "../../inception/requirements-analysis/requirements.md",
++      ]);
++      expect([...text.matchAll(/^- `(.+)`$/gm)].map((match) => match[1])).toEqual([
++        "aidlc/spaces/default/intents/261012-fix/inception/requirements-analysis/appendix.md",
++      ]);
++
++      const { emit } = load();
++      const resources = (await emit("resources_discover", { cwd: dir, reason: "startup" })) as { watchdogPaths: string[] };
++      expect(resources.watchdogPaths).toEqual([".harness-aidlc/host/watchdog/WATCHDOG.md", String(file)]);
++    } finally {
++      rmSync(dir, { recursive: true, force: true });
++    }
++  });
++});
++
+ describe("tool_result", () => {
+   test("an answered ask reaches record-human-turn with each question's own answer", async () => {
+     const { emit, calls } = load();
+diff --git a/tests/unit/t-harness-emit.test.ts b/tests/unit/t-harness-emit.test.ts
+index 3abf35384719ec8b2b9de5a15325054e7edde490..1647d434cf7d30e5428d55b51bc87eabc68d069f 100644
+--- a/tests/unit/t-harness-emit.test.ts
++++ b/tests/unit/t-harness-emit.test.ts
+@@ -49,12 +49,23 @@ describe("persona task agents", () => {
+       }
+       expect(fields.thinkingLevel ?? null).toBe(core.tier === "balanced" ? "medium" : null);
+       expect(fields.spawns ?? null).toBe(/^Task$/i.test(core.disallowedTools ?? "") ? "[]" : null);
++      // Only the builder carries a continuous advisor; reviewers review at the gate.
++      expect(fields.advisor ?? null).toBe(name === "aidlc-developer-agent.md" ? "true" : null);
+       expect(text).not.toContain("{{");
+       expect(text).not.toContain("<active-space>/memory/");
+     });
+   }
+ });
+ 
++describe("advisor guidance", () => {
++  test("both trees ship the AI-DLC watchdog the adapter contributes", () => {
++    for (const tree of Object.values(TREES)) {
++      const watchdog = readFileSync(join(tree, ENGINE, "host", "watchdog", "WATCHDOG.md"), "utf-8");
++      expect(watchdog).toContain("human-approved artifacts");
++    }
++  });
++});
++
+ describe("method include", () => {
+   test("lists the Claude include stub's method files, all shipped", () => {
+     const stub = readFileSync(join(REPO_ROOT, "harness", "claude", "rules-aidlc.md"), "utf-8");

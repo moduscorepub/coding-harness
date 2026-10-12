@@ -1,0 +1,6 @@
+{
+  "name": "backoff",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "bun test ./test/backoff.check.ts" }
+}

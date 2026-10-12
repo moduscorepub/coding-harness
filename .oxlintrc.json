@@ -41,6 +41,7 @@
 		".worktrees/**",
 		".wt/**",
 		".harness/**",
+		"integrations/aidlc/ratchet/*/cases/**",
 		"crates/**",
 		"docs/**",
 		"python/**",
