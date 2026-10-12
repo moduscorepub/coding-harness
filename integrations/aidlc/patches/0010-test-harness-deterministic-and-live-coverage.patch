@@ -16,19 +16,21 @@ Subject: [PATCH 10/10] test(harness): deterministic and live coverage
   harness live family is registered for local runs.
 ---
  scripts/ci-live-filter.ts                   |   1 +
- tests/.coverage-registry.json               |  36 +++
- tests/e2e/t-rpc-harness-live.serial.test.ts | 272 +++++++++++++++++++
- tests/harness/harness-rpc.ts                | 265 +++++++++++++++++++
+ tests/.coverage-registry.json               |  44 +++
+ tests/e2e/t-rpc-harness-live.serial.test.ts | 378 ++++++++++++++++++++
+ tests/harness/harness-rpc.ts                | 265 ++++++++++++++
  tests/lib/test-matrix.ts                    |   2 +-
  tests/run-tests.ts                          |   1 +
- tests/unit/t-harness-adapter-map.test.ts    | 274 ++++++++++++++++++++
- tests/unit/t-harness-emit.test.ts           | 124 +++++++++
- tests/unit/t-harness-hook-contracts.test.ts | 262 +++++++++++++++++++
- tests/unit/t-harness-usage-reader.test.ts   | 181 +++++++++++++
- 10 files changed, 1417 insertions(+), 1 deletion(-)
+ tests/unit/t-harness-adapter-map.test.ts    | 274 ++++++++++++++
+ tests/unit/t-harness-config-doctor.test.ts  | 118 ++++++
+ tests/unit/t-harness-emit.test.ts           | 124 +++++++
+ tests/unit/t-harness-hook-contracts.test.ts | 340 ++++++++++++++++++
+ tests/unit/t-harness-usage-reader.test.ts   | 181 ++++++++++
+ 11 files changed, 1727 insertions(+), 1 deletion(-)
  create mode 100644 tests/e2e/t-rpc-harness-live.serial.test.ts
  create mode 100644 tests/harness/harness-rpc.ts
  create mode 100644 tests/unit/t-harness-adapter-map.test.ts
+ create mode 100644 tests/unit/t-harness-config-doctor.test.ts
  create mode 100644 tests/unit/t-harness-emit.test.ts
  create mode 100644 tests/unit/t-harness-hook-contracts.test.ts
  create mode 100644 tests/unit/t-harness-usage-reader.test.ts
@@ -46,7 +48,7 @@ index 17b0c35344f3da8d9b4394334b59d0bef1e457f3..ea1a4ce93e32018a51cdbf3b0dcb77b0
    "claude-sdk": { env: { AIDLC_CLAUDE_SDK_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
    "release-contract": { env: { AIDLC_RELEASE_CONTRACT_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: false },
 diff --git a/tests/.coverage-registry.json b/tests/.coverage-registry.json
-index e1fcd006c321314d04ada80d526be356fc96270a..df02364e33660d9bb320a58994e19b9f0b6911a7 100644
+index e1fcd006c321314d04ada80d526be356fc96270a..e3ea6dea43a245ff88aeaad689c3b10d43f25693 100644
 --- a/tests/.coverage-registry.json
 +++ b/tests/.coverage-registry.json
 @@ -9802,6 +9802,10 @@
@@ -55,7 +57,7 @@ index e1fcd006c321314d04ada80d526be356fc96270a..df02364e33660d9bb320a58994e19b9f
          },
 +        {
 +          "file": "tests/unit/t-harness-hook-contracts.test.ts",
-+          "mechanism": "none"
++          "mechanism": "cli"
 +        },
          {
            "file": "tests/unit/t226-detector-corpus.test.ts",
@@ -66,7 +68,7 @@ index e1fcd006c321314d04ada80d526be356fc96270a..df02364e33660d9bb320a58994e19b9f
        "coveredBy": [
 +        {
 +          "file": "tests/e2e/t-rpc-harness-live.serial.test.ts",
-+          "mechanism": "none"
++          "mechanism": "cli"
 +        },
          {
            "file": "tests/integration/t-guard-recovery-production.test.ts",
@@ -77,7 +79,7 @@ index e1fcd006c321314d04ada80d526be356fc96270a..df02364e33660d9bb320a58994e19b9f
          },
 +        {
 +          "file": "tests/unit/t-harness-hook-contracts.test.ts",
-+          "mechanism": "none"
++          "mechanism": "cli"
 +        },
          {
            "file": "tests/unit/t147-kiro-hook-adapter.test.ts",
@@ -88,72 +90,94 @@ index e1fcd006c321314d04ada80d526be356fc96270a..df02364e33660d9bb320a58994e19b9f
          },
 +        {
 +          "file": "tests/unit/t-harness-hook-contracts.test.ts",
-+          "mechanism": "none"
++          "mechanism": "cli"
 +        },
          {
            "file": "tests/unit/t228-hook-run-exports.test.ts",
            "mechanism": "cli"
-@@ -10046,6 +10062,10 @@
+@@ -9998,6 +10014,10 @@
+           "file": "tests/integration/t-guard-recovery-production.test.ts",
+           "mechanism": "cli"
+         },
++        {
++          "file": "tests/unit/t-harness-hook-contracts.test.ts",
++          "mechanism": "cli"
++        },
+         {
+           "file": "tests/unit/t228-hook-run-exports.test.ts",
+           "mechanism": "cli"
+@@ -10034,6 +10054,10 @@
+       "unitId": "aidlc-reviewer-scope",
+       "minMechanism": "none",
+       "coveredBy": [
++        {
++          "file": "tests/unit/t-harness-hook-contracts.test.ts",
++          "mechanism": "cli"
++        },
+         {
+           "file": "tests/unit/t221-reviewer-scope-hook.test.ts",
+           "mechanism": "cli"
+@@ -10046,6 +10070,10 @@
        "unitId": "aidlc-run-sensors",
        "minMechanism": "none",
        "coveredBy": [
 +        {
 +          "file": "tests/e2e/t-rpc-harness-live.serial.test.ts",
-+          "mechanism": "none"
++          "mechanism": "cli"
 +        },
          {
            "file": "tests/integration/t131-hooks-settings-fire.test.ts",
            "mechanism": "cli"
-@@ -10054,6 +10074,10 @@
+@@ -10054,6 +10082,10 @@
            "file": "tests/integration/t95-sensor-fire-hook-feature.test.ts",
            "mechanism": "cli"
          },
 +        {
 +          "file": "tests/unit/t-harness-hook-contracts.test.ts",
-+          "mechanism": "none"
++          "mechanism": "cli"
 +        },
          {
            "file": "tests/unit/t13-hook-input-robustness.test.ts",
            "mechanism": "cli"
-@@ -10070,6 +10094,10 @@
+@@ -10070,6 +10102,10 @@
        "unitId": "aidlc-session-end",
        "minMechanism": "none",
        "coveredBy": [
 +        {
 +          "file": "tests/e2e/t-rpc-harness-live.serial.test.ts",
-+          "mechanism": "none"
++          "mechanism": "cli"
 +        },
          {
            "file": "tests/unit/t30-hook-session-end.test.ts",
            "mechanism": "cli"
-@@ -10082,6 +10110,10 @@
+@@ -10082,6 +10118,10 @@
        "unitId": "aidlc-session-start",
        "minMechanism": "none",
        "coveredBy": [
 +        {
 +          "file": "tests/e2e/t-rpc-harness-live.serial.test.ts",
-+          "mechanism": "none"
++          "mechanism": "cli"
 +        },
          {
            "file": "tests/integration/t173-session-switch-restamp.test.ts",
            "mechanism": "cli"
-@@ -10126,6 +10158,10 @@
+@@ -10126,6 +10166,10 @@
        "unitId": "aidlc-state-transition-guard",
        "minMechanism": "none",
        "coveredBy": [
 +        {
 +          "file": "tests/e2e/t-rpc-harness-live.serial.test.ts",
-+          "mechanism": "none"
++          "mechanism": "cli"
 +        },
          {
            "file": "tests/unit/t242-state-transition-guard.test.ts",
            "mechanism": "cli"
 diff --git a/tests/e2e/t-rpc-harness-live.serial.test.ts b/tests/e2e/t-rpc-harness-live.serial.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..1202dce3a7787ab04752115cf76e7a86686384a3
+index 0000000000000000000000000000000000000000..83629e747f86d22ab4c2eb6ab859b04795f665be
 --- /dev/null
 +++ b/tests/e2e/t-rpc-harness-live.serial.test.ts
-@@ -0,0 +1,272 @@
+@@ -0,0 +1,378 @@
 +// covers: file:skills/aidlc/SKILL.md, hook:aidlc-session-start, hook:aidlc-session-end, hook:aidlc-plan-approval-guard, hook:aidlc-state-transition-guard, hook:aidlc-run-sensors
 +//
 +// t-rpc-harness-live.serial.test.ts — drive the shipped dist/harness tree
@@ -324,6 +348,7 @@ index 0000000000000000000000000000000000000000..1202dce3a7787ab04752115cf76e7a86
 +          },
 +        },
 +      );
++      const state = (await rpc.command({ type: "get_state" })).data as { sessionFile?: string };
 +      await rpc.close();
 +
 +      expect(["completed", "aborted"]).toContain(outcome.status);
@@ -340,7 +365,19 @@ index 0000000000000000000000000000000000000000..1202dce3a7787ab04752115cf76e7a86
 +      for (const event of ["WORKFLOW_STARTED", "STAGE_STARTED", "HUMAN_TURN", "SESSION_ENDED"]) {
 +        expect(rows, event).toContain(`**Event**: ${event}`);
 +      }
-+      if (workflowTask) expect(rows).toContain("**Event**: SUBAGENT_COMPLETED");
++      if (workflowTask) {
++        expect(rows).toContain("**Event**: SUBAGENT_COMPLETED");
++        // S3: a stage dispatch carries the active stage's rule bundle into the
++        // subagent's assignment (deliver-stage-rules rewrote the task input).
++        const artifacts = String(state.sessionFile).replace(/\.jsonl$/, "");
++        const transcripts = readdirSync(artifacts, { recursive: true })
++          .map(String)
++          .filter((name) => name.endsWith(".jsonl") && !name.includes("__advisor"));
++        expect(
++          transcripts.some((name) => readFileSync(join(artifacts, name), "utf-8").includes("Active AI-DLC Rule Bundle")),
++          transcripts.join(", "),
++        ).toBe(true);
++      }
 +      const ledger = JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-sessions", "usage-ledger.json"), "utf-8")) as {
 +        totals: { tokens: { input: number; output: number } };
 +        byAgent: Record<string, unknown>;
@@ -351,6 +388,99 @@ index 0000000000000000000000000000000000000000..1202dce3a7787ab04752115cf76e7a86
 +      if (anyTask) expect(Object.keys(ledger.byAgent).filter((agent) => agent !== "main").length).toBeGreaterThan(0);
 +    },
 +    30 * 60_000,
++  );
++
++  live(
++    "S8: stopping mid-workflow after engaging the engine is answered with a continuation",
++    async () => {
++      const dir = seededProject("requirements-analysis");
++      const rpc = session(dir);
++      await rpc.start();
++      const outcome = await rpc.prompt(
++        "Run exactly `bun .harness-aidlc/tools/aidlc.ts engine orchestrate next` with the bash tool, " +
++          "then end your turn immediately without doing anything else.",
++        { stopWhen: (frame) => JSON.stringify(frame).includes("The AIDLC workflow has a pending step") },
++      );
++      await rpc.close();
++      expect(JSON.stringify(outcome.frames)).toContain("The AIDLC workflow has a pending step");
++    },
++    10 * 60_000,
++  );
++
++  live(
++    "S9: compaction runs validate-state, which leaves the recovery breadcrumb",
++    async () => {
++      const dir = seededProject("requirements-analysis");
++      const rpc = session(dir);
++      await rpc.start();
++      await rpc.prompt("Reply with the single word ready.");
++      const compacted = await rpc.command({ type: "compact" }, 5 * 60_000);
++      await rpc.close();
++      expect(compacted.success, JSON.stringify(compacted)).toBe(true);
++      expect(existsSync(join(seededRecordDir(dir), ".aidlc-engine", "recovery.md"))).toBe(true);
++    },
++    10 * 60_000,
++  );
++
++  live(
++    "S14: after a space switch the next turn answers from the new space's injected memory",
++    async () => {
++      const dir = project();
++      const engine = (...args: string[]) =>
++        spawnSync(process.execPath, [join(".harness-aidlc", "tools", "aidlc.ts"), "engine", ...args], { cwd: dir, encoding: "utf-8" });
++      expect(engine("space", "create", "team-b").status).toBe(0);
++      writeFileSync(
++        join(dir, "aidlc", "spaces", "team-b", "memory", "org.md"),
++        `${readFileSync(join(dir, "aidlc", "spaces", "team-b", "memory", "org.md"), "utf-8")}\nTeam B release codename: ORCHID-7.\n`,
++      );
++      expect(engine("space", "switch", "team-b").status).toBe(0);
++      const rpc = session(dir);
++      await rpc.start();
++      const outcome = await rpc.prompt(
++        "Without using any tool, answer from the AI-DLC method already in your instructions: " +
++          "what is the Team B release codename? Reply with the codename only.",
++      );
++      await rpc.close();
++      expect(outcome.toolCalls).toEqual([]);
++      expect(JSON.stringify(outcome.frames)).toContain("ORCHID-7");
++    },
++    10 * 60_000,
++  );
++
++  live(
++    "S12: an agent's configured thinking level is the level its spawned session runs at",
++    async () => {
++      const dir = project();
++      const configured = spawnSync(
++        process.execPath,
++        [join(".harness-aidlc", "tools", "aidlc.ts"), "config", "models", "--agent", "architect", "--effort", "low", "--project", "--yes"],
++        { cwd: dir, encoding: "utf-8" },
++      );
++      expect(configured.status, `${configured.stdout}${configured.stderr}`).toBe(0);
++      expect(readFileSync(join(dir, ".harness-aidlc", "host", "agents", "aidlc-architect-agent.md"), "utf-8")).toMatch(
++        /^thinkingLevel: low$/m,
++      );
++      const rpc = session(dir);
++      await rpc.start();
++      await rpc.prompt(
++        "Call the task tool exactly once with agent `aidlc-architect-agent`, name `Probe`, and the assignment " +
++          "`Reply with the word done.` Then stop.",
++        { stopWhen: (frame) => frame.type === "tool_execution_end" && frame.toolName === "task" },
++      );
++      const state = (await rpc.command({ type: "get_state" })).data as { sessionFile?: string };
++      await rpc.close();
++      const artifacts = String(state.sessionFile).replace(/\.jsonl$/, "");
++      const probe = readdirSync(artifacts).find((name) => /^Probe(-\d+)?\.jsonl$/.test(name));
++      expect(probe, readdirSync(artifacts).join(", ")).toBeDefined();
++      const levels = readFileSync(join(artifacts, probe!), "utf-8")
++        .split("\n")
++        .filter(Boolean)
++        .map((line) => JSON.parse(line) as { type?: string; thinkingLevel?: string })
++        .filter((entry) => entry.type === "thinking_level_change")
++        .map((entry) => entry.thinkingLevel);
++      expect(levels.at(-1)).toBe("low");
++    },
++    10 * 60_000,
 +  );
 +
 +  live(
@@ -1002,6 +1132,130 @@ index 0000000000000000000000000000000000000000..c9cd60ee8871ce5bf1296820dd595858
 +    expect(hooks()).not.toContain("record-human-turn");
 +  });
 +});
+diff --git a/tests/unit/t-harness-config-doctor.test.ts b/tests/unit/t-harness-config-doctor.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..139bb0c58d51eecc4c6736b560a2f39fc0c5f78c
+--- /dev/null
++++ b/tests/unit/t-harness-config-doctor.test.ts
+@@ -0,0 +1,118 @@
++// t-harness-config-doctor: configuration and diagnosis of a Coding Harness
++// project (a copy of the shipped dist/harness tree), through the engine's own
++// commands:
++//   - the doctor fails, with its fix, when the bootstrap extension is missing or
++//     gitignored (the harness would silently load no AI-DLC at all);
++//   - a model-policy preset rewrites the task agents' thinkingLevel per tier;
++//   - a space switch re-points the method include and every persona's method
++//     paths, and the adapter's next system-prompt injection carries the new
++//     space's memory.
++//
++// covers: function:repointHarnessIncludes, function:repointHarnessIncludesJson, function:buildConstitution
++
++import { afterEach, describe, expect, test } from "bun:test";
++import { spawnSync } from "node:child_process";
++import { appendFileSync, cpSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++
++const REPO_ROOT = join(import.meta.dir, "..", "..");
++const DIST = join(REPO_ROOT, "dist", "harness");
++const ENGINE = ".harness-aidlc";
++const scratch: string[] = [];
++afterEach(() => {
++  for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
++});
++
++function project(): string {
++  const dir = realpathSync(mkdtempSync(join(tmpdir(), "t-harness-config-")));
++  scratch.push(dir);
++  cpSync(DIST, dir, { recursive: true });
++  spawnSync("git", ["init", "-q"], { cwd: dir });
++  return dir;
++}
++
++function aidlc(dir: string, ...args: string[]): { code: number; out: string } {
++  const env = { ...process.env };
++  delete env.AIDLC_PROJECT_DIR;
++  delete env.CLAUDE_PROJECT_DIR;
++  const result = spawnSync(process.execPath, [join(ENGINE, "tools", "aidlc.ts"), ...args], {
++    cwd: dir,
++    encoding: "utf-8",
++    env,
++    timeout: 120_000,
++  });
++  return { code: result.status ?? -1, out: `${result.stdout}${result.stderr}` };
++}
++
++function frontmatterValue(text: string, key: string): string | null {
++  const block = /^---\n([\s\S]*?)\n---\n/.exec(text)?.[1] ?? "";
++  return new RegExp(`^${key}:\\s*(.*)$`, "m").exec(block)?.[1] ?? null;
++}
++
++describe("doctor", () => {
++  test("a missing bootstrap extension fails with the restore fix", () => {
++    const dir = project();
++    expect(aidlc(dir, "doctor", "--project-dir", dir).code).toBe(0);
++    renameSync(join(dir, ".harness", "extensions", "aidlc.ts"), join(dir, "bootstrap.bak"));
++    const broken = aidlc(dir, "doctor", "--project-dir", dir);
++    expect(broken.code).toBe(1);
++    expect(broken.out).toContain("fail  .harness/extensions/aidlc.ts present (bootstrap the harness auto-loads)");
++    expect(broken.out).toContain(".harness/extensions/aidlc.ts");
++  });
++
++  test("a gitignored bootstrap fails: the harness would skip it", () => {
++    const dir = project();
++    appendFileSync(join(dir, ".gitignore"), ".harness/\n");
++    const result = aidlc(dir, "doctor", "--project-dir", dir);
++    expect(result.code).toBe(1);
++    expect(result.out).toContain("fail  .harness/extensions/aidlc.ts is not gitignored");
++  });
++});
++
++describe("model policy", () => {
++  test("a preset sets thinkingLevel per tier on the task agents and never pins a model", () => {
++    const dir = project();
++    const result = aidlc(dir, "config", "models", "--preset", "minimal", "--project", "--yes");
++    expect(result.code, result.out).toBe(0);
++    const agents = join(dir, ENGINE, "host", "agents");
++    const levels = new Map<string, string | null>();
++    for (const name of readdirSync(agents)) {
++      const text = readFileSync(join(agents, name), "utf-8");
++      expect(frontmatterValue(text, "model"), name).toBeNull();
++      levels.set(name, frontmatterValue(text, "thinkingLevel"));
++    }
++    // minimal: medium for deciding and reviewing, low for writing up.
++    expect(levels.get("aidlc-delivery-agent.md")).toBe("low");
++    expect(levels.get("aidlc-architecture-reviewer-agent.md")).toBe("medium");
++    expect(levels.get("aidlc-developer-agent.md")).toBe("medium");
++    // A non-delegating agent keeps its spawn ban through the rewrite.
++    expect(frontmatterValue(readFileSync(join(agents, "aidlc-developer-agent.md"), "utf-8"), "spawns")).toBe("[]");
++  });
++});
++
++describe("space switch", () => {
++  test("the method include and persona paths follow the active space into the system prompt", async () => {
++    const dir = project();
++    expect(aidlc(dir, "engine", "space", "create", "team-b").code).toBe(0);
++    appendFileSync(join(dir, "aidlc", "spaces", "team-b", "memory", "org.md"), "\nTeam B marker: ORCHID-7.\n");
++    const switched = aidlc(dir, "engine", "space", "switch", "team-b");
++    expect(switched.code, switched.out).toBe(0);
++
++    const includes = JSON.parse(readFileSync(join(dir, ENGINE, "host", "includes.json"), "utf-8")) as { memory: string };
++    expect(includes.memory).toBe("aidlc/spaces/team-b/memory");
++    for (const surface of [join(ENGINE, "host", "agents"), join(ENGINE, "agents")]) {
++      for (const name of readdirSync(join(dir, surface))) {
++        const text = readFileSync(join(dir, surface, name), "utf-8");
++        expect(text, `${surface}/${name}`).not.toContain("aidlc/spaces/default/memory/");
++      }
++    }
++
++    const { buildConstitution } = (await import(join(dir, ENGINE, "host", "adapter.ts"))) as {
++      buildConstitution: (cwd: string) => string | null;
++    };
++    const injected = buildConstitution(dir) ?? "";
++    expect(injected).toContain("## aidlc/spaces/team-b/memory/org.md");
++    expect(injected).toContain("Team B marker: ORCHID-7.");
++  });
++});
 diff --git a/tests/unit/t-harness-emit.test.ts b/tests/unit/t-harness-emit.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..3abf35384719ec8b2b9de5a15325054e7edde490
@@ -1134,10 +1388,10 @@ index 0000000000000000000000000000000000000000..3abf35384719ec8b2b9de5a15325054e
 +});
 diff --git a/tests/unit/t-harness-hook-contracts.test.ts b/tests/unit/t-harness-hook-contracts.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..8fcede573d9189ebfd9580147d281be349203d67
+index 0000000000000000000000000000000000000000..4c8a30fb7ccc9f823f61fbbf02c7496a56dc88e6
 --- /dev/null
 +++ b/tests/unit/t-harness-hook-contracts.test.ts
-@@ -0,0 +1,262 @@
+@@ -0,0 +1,340 @@
 +// t-harness-hook-contracts: the shipped Coding Harness adapter (dist/harness),
 +// driven through synthetic harness events, runs the REAL core hooks through its
 +// production dispatcher (`bun .harness-aidlc/tools/aidlc.ts engine hook <name>`)
@@ -1145,9 +1399,10 @@ index 0000000000000000000000000000000000000000..8fcede573d9189ebfd9580147d281be3
 +// guard blocks reaching the tool call, sensor verdicts reaching the model, and the
 +// Stop decision computed from a harness session transcript.
 +//
-+// covers: hook:aidlc-record-human-turn, hook:aidlc-plan-approval-guard, hook:aidlc-continue-workflow, hook:aidlc-run-sensors, function:isHarnessSessionTranscript
++// covers: hook:aidlc-record-human-turn, hook:aidlc-plan-approval-guard, hook:aidlc-continue-workflow, hook:aidlc-run-sensors, hook:aidlc-reviewer-scope, hook:aidlc-review-freeze, function:isHarnessSessionTranscript
 +
 +import { afterEach, beforeAll, describe, expect, test } from "bun:test";
++import { spawnSync } from "node:child_process";
 +import {
 +  cpSync,
 +  existsSync,
@@ -1388,6 +1643,83 @@ index 0000000000000000000000000000000000000000..8fcede573d9189ebfd9580147d281be3
 +    expect(audit(dir)).toContain("traceability.json");
 +    expect(result?.additionalContext ?? "").toContain("AI-DLC sensors on");
 +    expect(result?.additionalContext ?? "").toContain("traceability");
++  });
++
++  test("a stage dispatch carries the active stage's rule bundle in every task assignment", async () => {
++    const { dir, sessionFile } = project();
++    const state = readFileSync(seededStateFile(dir), "utf-8");
++    writeActiveDirectiveMarker(dir, { kind: "run-stage", stage: "requirements-analysis", state_sha256: stateDigest(state) });
++    const emit = harness(dir, sessionFile);
++    const result = (await emit("tool_call", {
++      toolName: "task",
++      input: {
++        context: "Requirements analysis for the feature.",
++        tasks: [
++          { name: "Draft", agent: "aidlc-product-agent", task: "Draft the requirements." },
++          { name: "Risks", agent: "aidlc-architect-agent", task: "List the technical risks." },
++        ],
++      },
++    })) as { input?: { context?: string; tasks?: Array<{ task: string }> } } | undefined;
++    expect(result?.input?.context).toBe("Requirements analysis for the feature.");
++    for (const item of result?.input?.tasks ?? []) {
++      expect(item.task).toContain("## Active AI-DLC Rule Bundle");
++      expect(item.task).toContain("stage:requirements-analysis");
++    }
++    expect(result?.input?.tasks).toHaveLength(2);
++  });
++
++  test("a dispatched reviewer subagent cannot open a sibling unit; its own unit stays readable", async () => {
++    const { dir, sessionFile } = project();
++    const record = join(seededRecordDir(dir), ".aidlc-engine", "reviewer-dispatch.json");
++    mkdirSync(join(record, ".."), { recursive: true });
++    writeFileSync(
++      record,
++      JSON.stringify({ reviewer: "aidlc-architecture-reviewer-agent", stage: "nfr-requirements", unit: "U03-scoring", exempt: [] }),
++    );
++    const emit = harness(dir, sessionFile, "sub");
++    const unitFile = (unit: string) => join(seededRecordDir(dir), "construction", unit, "design.md");
++    const sibling = (await emit("tool_call", { toolName: "read", input: { path: unitFile("U01-infra") } })) as
++      | { block?: boolean; reason?: string }
++      | undefined;
++    expect(sibling?.block).toBe(true);
++    expect(sibling?.reason ?? "").toContain("This review cannot open");
++    expect(await emit("tool_call", { toolName: "read", input: { path: unitFile("U03-scoring") } })).toBeUndefined();
++  });
++
++  test("an edit to an artifact holding a fresh READY review is refused at the gate", async () => {
++    const { dir, sessionFile } = project();
++    const stageDir = join(seededRecordDir(dir), "inception", "requirements-analysis");
++    const artifact = join(stageDir, "requirements.md");
++    mkdirSync(stageDir, { recursive: true });
++    writeFileSync(artifact, "# Requirements\n");
++    writeFileSync(join(stageDir, "requirements-analysis-questions.md"), "# Requirements Questions\n");
++    const tool = (name: string, args: string[], extraEnv: Record<string, string> = {}) => {
++      const result = spawnSync(process.execPath, [join(dir, ".harness-aidlc", "tools", name), ...args, "--project-dir", dir], {
++        cwd: dir,
++        encoding: "utf-8",
++        env: { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1", ...extraEnv },
++      });
++      if (result.status !== 0) throw new Error(`${name} ${args.join(" ")}: ${result.stdout}${result.stderr}`);
++      return result.stdout;
++    };
++    const review = ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"];
++    const { reviewFile } = JSON.parse(tool("aidlc-log.ts", review)) as { reviewFile: string };
++    mkdirSync(join(dir, reviewFile, ".."), { recursive: true });
++    writeFileSync(
++      join(dir, reviewFile),
++      "**Verdict:** READY\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n",
++    );
++    tool("aidlc-log.ts", [...review, "--verdict", "READY"]);
++    tool("aidlc-state.ts", ["gate-start", "requirements-analysis"], { AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" });
++
++    const emit = harness(dir, sessionFile);
++    const result = (await emit("tool_call", {
++      toolName: "edit",
++      input: { path: artifact, edits: [{ old_text: "# Requirements", new_text: "# Requirements (revised)" }] },
++    })) as { block?: boolean; reason?: string } | undefined;
++    expect(result?.block).toBe(true);
++    expect(result?.reason ?? "").toContain("review-freeze");
++    expect(audit(dir)).toContain("**Event**: REVIEW_FREEZE_BLOCKED");
 +  });
 +
 +  test("a harness session transcript is recognised by its session header", async () => {

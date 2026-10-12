@@ -14,4 +14,4 @@ Apply in order with `git am -3 patches/*.patch`. See [../GRAFTING.md](../GRAFTIN
 | [`0007-feat-harness-Coding-Harness-distribution.patch`](0007-feat-harness-Coding-Harness-distribution.patch) | feat(harness): Coding Harness distribution | 26 |
 | [`0008-feat-release-harness-in-release-verification-and-bin.patch`](0008-feat-release-harness-in-release-verification-and-bin.patch) | feat(release): harness in release verification and binary gates | 3 |
 | [`0009-feat-core-shared-content-lists-Coding-Harness.patch`](0009-feat-core-shared-content-lists-Coding-Harness.patch) | feat(core): shared content lists Coding Harness | 2 |
-| [`0010-test-harness-deterministic-and-live-coverage.patch`](0010-test-harness-deterministic-and-live-coverage.patch) | test(harness): deterministic and live coverage | 10 |
+| [`0010-test-harness-deterministic-and-live-coverage.patch`](0010-test-harness-deterministic-and-live-coverage.patch) | test(harness): deterministic and live coverage | 11 |

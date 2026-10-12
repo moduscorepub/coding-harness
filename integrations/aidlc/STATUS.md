@@ -9,7 +9,7 @@ The running record of the end-to-end build: what passed at each gate, what devia
 | P0 | Source build reproduces installed 2.10.0; build/install scripts | done | full build green (54/54 binary gates); sandbox install; `config --harness harness` + doctor 0 problems; patches reproduce the fork tree |
 | P1 | Harness H1–H3, version 1.1.0 | done | coding-harness `f6cd9e7` pushed; no test regressions (below); 1.1.0 binary built to a separate path |
 | P2 | Core registration, packager, init/doctor, plugins, release scripts | done | C01–C09; fork suite equals the baseline; site gate 342 sites / 25 files |
-| P3 | Hook contracts, adapter, deterministic tests, live S1–S14 | in progress | C10 deterministic tests green; live S1, S2, S6, S7, S10, S11 green |
+| P3 | Hook contracts, adapter, deterministic tests, live S1–S14 | done | C10: S3/S4/S5/S12/S13/S14 deterministic contracts; live S1–S3, S6–S12, S14 green (8 scenarios, 243 s) |
 | P4 | Live parity with Claude Code, coexistence | pending | — |
 | P6 | Improvements A1–A4, B1, B3, B4, B2 | pending | — |
 | P5 | Version 1.0.0, real install, dogfood | pending | — |
@@ -33,8 +33,20 @@ The running record of the end-to-end build: what passed at each gate, what devia
 - **Patch series reproduces the fork.** `git am -3 patches/*.patch` on a fresh `v2.10.0` clone yields a tree identical to `harness-distribution` HEAD.
 - **Harness 1.1.0 has no regressions.** Coding-agent tests that fail with H1–H3 were each re-run with and without the change (`git stash`): the singleton bucket (3 failures) and the 40 other failing files (98 failures) fail identically either way, and `packages/tui` has the same 16 failures before and after. These are pre-existing on this machine. H1–H3's own tests (`sdk-resources-discover`, `discovery/at-imports`, `discovery/claude-tools`) pass, and `check:types` is clean for coding-agent and tui.
 - **Fork suite equals the baseline.** `bun tests/run-tests.ts --smoke --unit --no-llm` on the fork: 367 files; the only failures are the four baseline ones above that still fail (`t-tui-tmux-compat`, `t243`, `t293`, `t296`). Every upstream test that enumerates distributions now covers `harness` (test matrix entry, root files, method include, reviewer-scope registration, onboarding, documentation roster, release inventory, plugin build).
-- **C10 deterministic coverage.** `t-harness-emit` (persona projection, include list, entrypoint boundary, skill drift guard), `t-harness-adapter-map` (event-to-hook mapping through the adapter's `runCore` seam), `t-harness-hook-contracts` (the shipped adapter driving the real hooks through the production dispatcher), `t-harness-usage-reader` (harness session usage, attribution, incremental fold).
-- **Live journeys on Coding Harness 1.1.0** (`AIDLC_HARNESS_RPC_LIVE=1`, RPC mode, `anthropic/claude-sonnet-5-5`, scripted `ask` answers): S1/S10/S11 — `/aidlc bugfix …` composes a plan, passes the plan gate, creates the intent, runs the first stage with subagents and asks inside the workflow; the audit records `WORKFLOW_STARTED`, `STAGE_STARTED`, `HUMAN_TURN`, `SESSION_ENDED`, and the usage ledger attributes subagent spend by agent type. S2 — a write before plan approval is refused with the guard's reason. S6 — a traceability write fires its sensor and the verdict reaches the model. S7 — `engine state approve` through bash is refused. 4/4 pass in 192 s.
+- **C10 deterministic coverage.** `t-harness-emit` (persona projection, include list, entrypoint boundary, skill drift guard), `t-harness-adapter-map` (event-to-hook mapping through the adapter's `runCore` seam), `t-harness-hook-contracts` (the shipped adapter driving the real hooks through the production dispatcher), `t-harness-usage-reader` (harness session usage, attribution, incremental fold), `t-harness-config-doctor` (S12, S13, S14). The hook contracts include S3 (a stage dispatch rewrites every `task` assignment with the stage's rule bundle and keeps the shared context), S4 (a reviewer subagent's `read` of a sibling unit is blocked; its own unit is readable) and S5 (after a READY review and `gate-start`, an edit to the reviewed artifact is refused and audited as `REVIEW_FREEZE_BLOCKED`). S13: a missing or gitignored `.harness/extensions/aidlc.ts` fails `aidlc doctor`. S12: `config models --preset minimal` rewrites the persona twins' `thinkingLevel` and writes no `model`. S14: `engine space switch` repoints `includes.json` and the personas, and the constitution the adapter injects carries the new space's memory.
+- **Live journeys on Coding Harness 1.1.0** (`AIDLC_HARNESS_RPC_LIVE=1`, RPC mode, `anthropic/claude-sonnet-5-5`, scripted `ask` answers; 8/8 pass in 243 s):
+
+  | Scenario | What the run proves |
+  |---|---|
+  | S1, S10, S11 | `/aidlc bugfix …` composes a plan, passes the plan gate, creates the intent, runs the first stage with subagents and asks inside the workflow; the audit records `WORKFLOW_STARTED`, `STAGE_STARTED`, `HUMAN_TURN`, `SESSION_ENDED`; the usage ledger attributes subagent spend by agent type |
+  | S3 | a subagent transcript of that journey carries `Active AI-DLC Rule Bundle` |
+  | S2 | a write before plan approval is refused with the guard's reason |
+  | S6 | a traceability write fires its sensor and the verdict reaches the model |
+  | S7 | `engine state approve` through bash is refused |
+  | S8 | ending the turn mid-workflow is answered with `The AIDLC workflow has a pending step` |
+  | S9 | RPC `compact` runs validate-state, which writes `<record>/.aidlc-engine/recovery.md` |
+  | S12 | `config models --agent architect --effort low` makes a spawned architect session record `thinking_level_change` → `low` |
+  | S14 | after `engine space switch team-b`, the model answers a codename only present in team-b's memory, with no tool call |
 
 ## Deviations from SPEC v1
 - **Source-based fork.** v1 patched installed runtime trees. v2 forks the upstream source, because it is public (MIT-0), reproduces the install exactly, and grafts with `git am`.
