@@ -7,9 +7,16 @@ The shared onboarding names the .harness-aidlc engine directory and the
 harness onboarding file, and workspace detection documents the harness
 directories the scanner already excludes.
 ---
- .../stages/initialization/workspace-detection.md            | 6 +++---
- core/templates/onboarding.md                                | 3 ++-
- 2 files changed, 5 insertions(+), 4 deletions(-)
+ .../stages/initialization/workspace-detection.md           | 6 +++---
+ core/templates/onboarding.md                               | 3 ++-
+ harness/codex/manifest.ts                                  | 2 ++
+ harness/copilot/manifest.ts                                | 3 +++
+ harness/cursor/manifest.ts                                 | 2 ++
+ harness/kiro-ide/manifest.ts                               | 2 ++
+ harness/kiro/manifest.ts                                   | 2 ++
+ harness/opencode/manifest.ts                               | 2 ++
+ tests/unit/t243-install-mechanism.test.ts                  | 7 +++++++
+ 9 files changed, 25 insertions(+), 4 deletions(-)
 
 diff --git a/core/aidlc-common/stages/initialization/workspace-detection.md b/core/aidlc-common/stages/initialization/workspace-detection.md
 index 42ef31e0f02e5801ad863fff906ebfe03ac2a215..e2c43e5985ed14f13af56f7672f1b11d521667e2 100644
@@ -63,3 +70,136 @@ index a880ab2d58ad707b84149f20d7ab0f64bb247e74..a0bcbf89a7fab3afd9d5952612517037
  
  ## Conventions
  
+diff --git a/harness/codex/manifest.ts b/harness/codex/manifest.ts
+index 73a82c65394286faee29f68397826291310b228c..c13d2bbca5417842341343ab9746563641ae7e3d 100644
+--- a/harness/codex/manifest.ts
++++ b/harness/codex/manifest.ts
+@@ -69,6 +69,8 @@ const manifest: HarnessManifest = {
+           "sha256:87563548299dd2a0c1fcd3cde480b612bd1ec767a2550dbc05a6a041a3d7f522",
+           // The pre-neutral shipped variant (#1268 made the root block harness-neutral).
+           "sha256:c7843449d549d4226be39169a9c31bf89694cd0b0754cb1ee68bdf61759538ce",
++          // The 2.10.0 shipped variant (the shared onboarding list now names Coding Harness).
++          "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
+         ],
+       },
+     },
+diff --git a/harness/copilot/manifest.ts b/harness/copilot/manifest.ts
+index cad5cf2f6c53d7bbd279786ebf3f17d4a6c20a55..31eead8c05a14067c372b1b6799136071d822299 100644
+--- a/harness/copilot/manifest.ts
++++ b/harness/copilot/manifest.ts
+@@ -73,6 +73,9 @@ const manifest: HarnessManifest = {
+           "sha256:55b31ba55f6e7ebc47fe76a00039e2ec16e020503fb63791cbd8665438ff32ac",
+           // The pre-Guards shipped variant (the onboarding gained its Guards section).
+           "sha256:7a3a19981ba7a3c447b54eb0d0b1e96f8c9931687595967103cb5dfbb3c2b309",
++          // The 2.10.0 shipped variants, release and copy channel (the shared onboarding list now names Coding Harness).
++          "sha256:df0b7104d6b658f3f101b2c5ab9102775452c4f83eefac0e61f270c9a757837f",
++          "sha256:622ebad60ee4fed6a2a9811e7378ccbff6b76d651aaee00fd079b02471d8cf06",
+         ],
+       },
+     },
+diff --git a/harness/cursor/manifest.ts b/harness/cursor/manifest.ts
+index a2264223e12f9f6c2bdf131cf24beec6cec6ac11..77b3e43fa42a6c8ceacba4f5a6583c5c55738132 100644
+--- a/harness/cursor/manifest.ts
++++ b/harness/cursor/manifest.ts
+@@ -69,6 +69,8 @@ const manifest: HarnessManifest = {
+           "sha256:2ef8a8cd1b72e59d017013b8d261721b1c5dedb82499b44dc9a97be01b6a73cb",
+           // The pre-neutral shipped variant (#1268 made the root block harness-neutral).
+           "sha256:eeabf9f9555124da3f5ad34eb3a26b9fcbf3e2ccd65610cb9f0182701cf3ef48",
++          // The 2.10.0 shipped variant (the shared onboarding list now names Coding Harness).
++          "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
+         ],
+       },
+     },
+diff --git a/harness/kiro-ide/manifest.ts b/harness/kiro-ide/manifest.ts
+index a49422696fb42de1ea64913313da0c4b3a1a181a..151f137a8fc19001c56532b4a5279958fccfdaaf 100644
+--- a/harness/kiro-ide/manifest.ts
++++ b/harness/kiro-ide/manifest.ts
+@@ -102,6 +102,8 @@ const manifest: HarnessManifest = {
+           "sha256:94f27a88ddba31149876da0609e0eb9a36ce153f52f27898579c846daec2ff59",
+           // The pre-neutral shipped variant (#1268 made the root block harness-neutral).
+           "sha256:5f6f076a5a9d8a11e1078f568c9dee091f399d9999fae89e9dffa62d8697b797",
++          // The 2.10.0 shipped variant (the shared onboarding list now names Coding Harness).
++          "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
+         ],
+       },
+     },
+diff --git a/harness/kiro/manifest.ts b/harness/kiro/manifest.ts
+index cefee250e116ed273048e1137fdb07600f8769bc..93872440ce2aefc1781600182870b408f291b1e1 100644
+--- a/harness/kiro/manifest.ts
++++ b/harness/kiro/manifest.ts
+@@ -66,6 +66,8 @@ const manifest: HarnessManifest = {
+           "sha256:9ad7daa07cbafe9f149311b679281eecd991d2ec77787fc7751226ea0622522b",
+           // The pre-neutral shipped variant (#1268 made the root block harness-neutral).
+           "sha256:c8777a03505f11dcbb4fb339fef1a8072d9d2500ce401b69a06073b523ea2c67",
++          // The 2.10.0 shipped variant (the shared onboarding list now names Coding Harness).
++          "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
+         ],
+       },
+     },
+diff --git a/harness/opencode/manifest.ts b/harness/opencode/manifest.ts
+index e361113e666c7f9d539feade8ee106d2f6ff4864..88eaf0e9de062b22ea5461a487fb337d0cbe104d 100644
+--- a/harness/opencode/manifest.ts
++++ b/harness/opencode/manifest.ts
+@@ -63,6 +63,8 @@ const manifest: HarnessManifest = {
+           "sha256:db6e65ed85d6b47ca47d72b5a323ddc4dca76d021cce92591c1a28b26d9f237a",
+           // The pre-neutral shipped variant (#1268 made the root block harness-neutral).
+           "sha256:c5b990429fe6dfa084d58fc592d1d22c1170cc35aa98f9cbb2c82b9924520eda",
++          // The 2.10.0 shipped variant (the shared onboarding list now names Coding Harness).
++          "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
+         ],
+       },
+     },
+diff --git a/tests/unit/t243-install-mechanism.test.ts b/tests/unit/t243-install-mechanism.test.ts
+index e3142bd9e5aa5654939f5c64861a680e102e8004..ee84c80cb8ff25b54026c4f7f2795f45e2616ab5 100644
+--- a/tests/unit/t243-install-mechanism.test.ts
++++ b/tests/unit/t243-install-mechanism.test.ts
+@@ -5098,6 +5098,7 @@ describe("t243 projection channel", () => {
+           "sha256:87563548299dd2a0c1fcd3cde480b612bd1ec767a2550dbc05a6a041a3d7f522",
+           "sha256:c7843449d549d4226be39169a9c31bf89694cd0b0754cb1ee68bdf61759538ce",
+           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
++          "sha256:7db7c4caf7cb369b7f38ef4159c43b1f23be7bba4f31cd83b649ed5cafe6891e",
+         ],
+       },
+       kiro: {
+@@ -5117,6 +5118,7 @@ describe("t243 projection channel", () => {
+           "sha256:9ad7daa07cbafe9f149311b679281eecd991d2ec77787fc7751226ea0622522b",
+           "sha256:c8777a03505f11dcbb4fb339fef1a8072d9d2500ce401b69a06073b523ea2c67",
+           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
++          "sha256:7db7c4caf7cb369b7f38ef4159c43b1f23be7bba4f31cd83b649ed5cafe6891e",
+         ],
+       },
+       "kiro-ide": {
+@@ -5136,6 +5138,7 @@ describe("t243 projection channel", () => {
+           "sha256:94f27a88ddba31149876da0609e0eb9a36ce153f52f27898579c846daec2ff59",
+           "sha256:5f6f076a5a9d8a11e1078f568c9dee091f399d9999fae89e9dffa62d8697b797",
+           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
++          "sha256:7db7c4caf7cb369b7f38ef4159c43b1f23be7bba4f31cd83b649ed5cafe6891e",
+         ],
+       },
+       cursor: {
+@@ -5145,6 +5148,7 @@ describe("t243 projection channel", () => {
+           "sha256:2ef8a8cd1b72e59d017013b8d261721b1c5dedb82499b44dc9a97be01b6a73cb",
+           "sha256:eeabf9f9555124da3f5ad34eb3a26b9fcbf3e2ccd65610cb9f0182701cf3ef48",
+           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
++          "sha256:7db7c4caf7cb369b7f38ef4159c43b1f23be7bba4f31cd83b649ed5cafe6891e",
+         ],
+         "install.ts": [
+           "sha256:338e1d36257108ce908eb42992e87e5df7cf96003a45e04a72189e4d79110aba",
+@@ -5157,6 +5161,7 @@ describe("t243 projection channel", () => {
+           "sha256:db6e65ed85d6b47ca47d72b5a323ddc4dca76d021cce92591c1a28b26d9f237a",
+           "sha256:c5b990429fe6dfa084d58fc592d1d22c1170cc35aa98f9cbb2c82b9924520eda",
+           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
++          "sha256:7db7c4caf7cb369b7f38ef4159c43b1f23be7bba4f31cd83b649ed5cafe6891e",
+         ],
+         "opencode.json": [
+           "sha256:3be60b2be72b7a423fdaa90fd7d0d9d19613875c05ad5f1a2b6e20fcb54cd1e5",
+@@ -5170,7 +5175,9 @@ describe("t243 projection channel", () => {
+           "sha256:bf3077a6520e2735f618bad386858afc57edceaa791d98de7a6c269d71861e56",
+           "sha256:55b31ba55f6e7ebc47fe76a00039e2ec16e020503fb63791cbd8665438ff32ac",
+           "sha256:7a3a19981ba7a3c447b54eb0d0b1e96f8c9931687595967103cb5dfbb3c2b309",
++          "sha256:df0b7104d6b658f3f101b2c5ab9102775452c4f83eefac0e61f270c9a757837f",
+           "sha256:622ebad60ee4fed6a2a9811e7378ccbff6b76d651aaee00fd079b02471d8cf06",
++          "sha256:db278dc3e3a645684597a541752b527f3510b8e29be5feb9d9efc59724ce56c5",
+         ],
+       },
+     };

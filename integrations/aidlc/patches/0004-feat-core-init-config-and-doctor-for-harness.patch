@@ -11,10 +11,12 @@ as the hook-wiring trust files. The doctor checks the bootstrap, adapter,
 bootstrap is gitignored (the harness skips ignored extensions), probes the
 full hook roster, and reads native command trust from the adapter.
 ---
- core/tools/aidlc-config-diagnostics.ts | 10 ++++++-
- core/tools/aidlc-init.ts               |  6 +++-
- core/tools/aidlc-utility.ts            | 38 +++++++++++++++++++++++++-
- 3 files changed, 51 insertions(+), 3 deletions(-)
+ core/tools/aidlc-config-diagnostics.ts        | 10 ++++-
+ core/tools/aidlc-doctor.ts                    |  5 ++-
+ core/tools/aidlc-init.ts                      |  6 ++-
+ core/tools/aidlc-utility.ts                   | 38 ++++++++++++++++++-
+ .../t304-round18-acceptance-fixes.test.ts     |  1 +
+ 5 files changed, 56 insertions(+), 4 deletions(-)
 
 diff --git a/core/tools/aidlc-config-diagnostics.ts b/core/tools/aidlc-config-diagnostics.ts
 index 4a15063b7047aad60250d5b2732e54b836ce74eb..397ff810504ab7edabfbc6a0f2e70cae41b20976 100644
@@ -44,6 +46,22 @@ index 4a15063b7047aad60250d5b2732e54b836ce74eb..397ff810504ab7edabfbc6a0f2e70cae
    return [...new Set(files)];
  }
  
+diff --git a/core/tools/aidlc-doctor.ts b/core/tools/aidlc-doctor.ts
+index f53145dff670c690a923311776c796dde1383079..7b66bc885fb4f64356ad640613e448bfd4ca1ae4 100644
+--- a/core/tools/aidlc-doctor.ts
++++ b/core/tools/aidlc-doctor.ts
+@@ -200,7 +200,10 @@ function humanReport(
+   projectDir: string,
+   verbose: boolean,
+ ): string {
+-  const harness = discoverProjectHarnesses(projectDir)[0];
++  // Coexisting distributions share one project: the heading names the one whose
++  // tree is running, whose wiring the project checks below describe.
++  const harnesses = discoverProjectHarnesses(projectDir);
++  const harness = harnesses.find((candidate) => candidate.harnessDir === harnessDir()) ?? harnesses[0];
+   const productNames: Record<string, string> = {
+     claude: "Claude Code",
+     codex: "Codex CLI",
 diff --git a/core/tools/aidlc-init.ts b/core/tools/aidlc-init.ts
 index a70a6364c7b9235b53149b8d4fa11c6598e42f17..21dc6dd9618c2c4d3f9a4b8984e7ea7fad75ca19 100644
 --- a/core/tools/aidlc-init.ts
@@ -131,3 +149,15 @@ index 2d5389e1cef3bcb8d297975c7bae9f06b01bb339..4946719d9df08af7ccb0940028dd892e
    } else {
      const settingsPath = join(projectDir, harness, "settings.json");
      results.push({
+diff --git a/tests/unit/t304-round18-acceptance-fixes.test.ts b/tests/unit/t304-round18-acceptance-fixes.test.ts
+index f327bbe375c18ec82c71f4536f85c3de943cddfb..46d809eb1cd11ec20955eab5466211efc2506c8a 100644
+--- a/tests/unit/t304-round18-acceptance-fixes.test.ts
++++ b/tests/unit/t304-round18-acceptance-fixes.test.ts
+@@ -127,6 +127,7 @@ function runWizard(
+       claude: { found: false, probed: true },
+       codex: { found: false, probed: true },
+       copilot: { found: false, probed: true },
++      harness: { found: false, probed: true },
+       cursor: { found: false, probed: true },
+       kiro: { found: false, probed: true },
+       "kiro-ide": { found: false, probed: false },

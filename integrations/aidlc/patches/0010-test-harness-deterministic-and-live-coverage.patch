@@ -15,19 +15,33 @@ Subject: [PATCH 10/10] test(harness): deterministic and live coverage
   with scripted ask answers through tests/harness/harness-rpc.ts; the
   harness live family is registered for local runs.
 ---
- scripts/ci-live-filter.ts                   |   1 +
- tests/.coverage-registry.json               |  44 +++
- tests/e2e/t-rpc-harness-live.serial.test.ts | 378 ++++++++++++++++++++
- tests/harness/harness-rpc.ts                | 265 ++++++++++++++
- tests/lib/test-matrix.ts                    |   2 +-
- tests/run-tests.ts                          |   1 +
- tests/unit/t-harness-adapter-map.test.ts    | 274 ++++++++++++++
- tests/unit/t-harness-config-doctor.test.ts  | 118 ++++++
- tests/unit/t-harness-emit.test.ts           | 124 +++++++
- tests/unit/t-harness-hook-contracts.test.ts | 340 ++++++++++++++++++
- tests/unit/t-harness-usage-reader.test.ts   | 181 ++++++++++
- 11 files changed, 1727 insertions(+), 1 deletion(-)
+ scripts/ci-live-filter.ts                     |   1 +
+ tests/.coverage-registry.json                 |  48 +++
+ .../t-harness-bugfix-parity.serial.test.ts    | 276 ++++++++++++
+ .../t-harness-coexistence-live.serial.test.ts | 137 ++++++
+ tests/e2e/t-rpc-harness-live.serial.test.ts   | 388 +++++++++++++++++
+ tests/fixtures/bugfix-invoice/README.md       |   8 +
+ tests/fixtures/bugfix-invoice/package.json    |   9 +
+ tests/fixtures/bugfix-invoice/src/invoice.ts  |  16 +
+ .../bugfix-invoice/test/invoice.check.ts      |  19 +
+ tests/harness/harness-rpc.ts                  | 265 ++++++++++++
+ tests/harness/sdk-drive.ts                    |   8 +
+ tests/lib/test-matrix.ts                      |   2 +-
+ tests/run-tests.ts                            |   1 +
+ tests/unit/gen-coverage-registry.test.ts      |   6 +
+ tests/unit/t-harness-adapter-map.test.ts      | 362 ++++++++++++++++
+ tests/unit/t-harness-config-doctor.test.ts    | 159 +++++++
+ tests/unit/t-harness-emit.test.ts             | 124 ++++++
+ tests/unit/t-harness-hook-contracts.test.ts   | 397 ++++++++++++++++++
+ tests/unit/t-harness-usage-reader.test.ts     | 181 ++++++++
+ 19 files changed, 2406 insertions(+), 1 deletion(-)
+ create mode 100644 tests/e2e/t-harness-bugfix-parity.serial.test.ts
+ create mode 100644 tests/e2e/t-harness-coexistence-live.serial.test.ts
  create mode 100644 tests/e2e/t-rpc-harness-live.serial.test.ts
+ create mode 100644 tests/fixtures/bugfix-invoice/README.md
+ create mode 100644 tests/fixtures/bugfix-invoice/package.json
+ create mode 100644 tests/fixtures/bugfix-invoice/src/invoice.ts
+ create mode 100644 tests/fixtures/bugfix-invoice/test/invoice.check.ts
  create mode 100644 tests/harness/harness-rpc.ts
  create mode 100644 tests/unit/t-harness-adapter-map.test.ts
  create mode 100644 tests/unit/t-harness-config-doctor.test.ts
@@ -48,7 +62,7 @@ index 17b0c35344f3da8d9b4394334b59d0bef1e457f3..ea1a4ce93e32018a51cdbf3b0dcb77b0
    "claude-sdk": { env: { AIDLC_CLAUDE_SDK_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
    "release-contract": { env: { AIDLC_RELEASE_CONTRACT_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: false },
 diff --git a/tests/.coverage-registry.json b/tests/.coverage-registry.json
-index e1fcd006c321314d04ada80d526be356fc96270a..e3ea6dea43a245ff88aeaad689c3b10d43f25693 100644
+index e1fcd006c321314d04ada80d526be356fc96270a..62a809e4f6318272a0e12f37aec565692ca51ddf 100644
 --- a/tests/.coverage-registry.json
 +++ b/tests/.coverage-registry.json
 @@ -9802,6 +9802,10 @@
@@ -172,23 +186,465 @@ index e1fcd006c321314d04ada80d526be356fc96270a..e3ea6dea43a245ff88aeaad689c3b10d
          {
            "file": "tests/unit/t242-state-transition-guard.test.ts",
            "mechanism": "cli"
+@@ -10357,6 +10401,10 @@
+       "unitId": "bugfix",
+       "minMechanism": "none",
+       "coveredBy": [
++        {
++          "file": "tests/e2e/t-harness-bugfix-parity.serial.test.ts",
++          "mechanism": "sdk"
++        },
+         {
+           "file": "tests/e2e/t-tui-kiro-bugfix-scope.serial.test.ts",
+           "mechanism": "tui"
+diff --git a/tests/e2e/t-harness-bugfix-parity.serial.test.ts b/tests/e2e/t-harness-bugfix-parity.serial.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a352d64c9adfe6e65b1ddbf8d69301dadad59922
+--- /dev/null
++++ b/tests/e2e/t-harness-bugfix-parity.serial.test.ts
+@@ -0,0 +1,276 @@
++// covers: scope:bugfix
++//
++// t-harness-bugfix-parity.serial.test.ts — S15 and T4: one scripted bugfix
++// journey, run start to finish under Claude Code (the Claude distribution
++// through the Agent SDK driver) and under Coding Harness (the harness
++// distribution through its RPC driver), on the same fixture: a small Bun
++// library whose discount arithmetic is wrong and whose test suite fails on it.
++//
++// Both hosts get the same prompt and the same answer policy (the first option
++// of every structured question, so every gate is approved). Each journey must
++// complete the workflow and leave the fixture's tests passing (S15). The two
++// runs must then agree on what the method did (T4):
++//   - the stage progress in aidlc-state.md,
++//   - per stage, the events the engine enforces, in first-occurrence order:
++//     stage, phase and workflow transitions, workspace setup, plan approval,
++//     summary confirmation, reviews and gates, none of which a workflow can
++//     pass without. Everything else varies with the host or the model, not
++//     the method: sessions, human turns, artifact writes, subagent completions
++//     and sensor rows (the host and how many writes the model makes); the
++//     conductor's own log of non-gate questions (DECISION_RECORDED,
++//     QUESTION_ANSWERED: a model may skip that logging step on either host);
++//     learnings outcomes (RULE_LEARNED, MEMORY_EMPTY: what the model
++//     proposed); and guard and error traces (GUARD_STOOD_ASIDE, ERROR_LOGGED:
++//     which commands the model chose and retried). Repeat counts, such as
++//     review iterations, are the model's too.
++//   - the set of artifact files in the intent record.
++// Usage numbers and model ids may differ.
++//
++// LIVE GATE: AIDLC_HARNESS_RPC_LIVE=1 with the harness live prerequisites (see
++// t-rpc-harness-live), plus the `claude` CLI and a Claude credential for the
++// Agent SDK. Each journey takes tens of minutes; they run concurrently.
++
++import { afterAll, describe, expect, test } from "bun:test";
++import { spawnSync } from "node:child_process";
++import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join, relative } from "node:path";
++import { HarnessRpc } from "../harness/harness-rpc.ts";
++import { driveAidlc } from "../harness/sdk-drive.ts";
++
++const REPO_ROOT = join(import.meta.dir, "..", "..");
++const FIXTURE = join(REPO_ROOT, "tests", "fixtures", "bugfix-invoice");
++const LIVE = process.env.AIDLC_HARNESS_RPC_LIVE === "1";
++const BIN = process.env.AIDLC_HARNESS_BIN ?? Bun.which("harness") ?? "";
++const KEY = process.env.AIDLC_HARNESS_ANTHROPIC_KEY ?? process.env.ANTHROPIC_API_KEY ?? "";
++const HARNESS_MODEL = process.env.AIDLC_HARNESS_MODEL ?? "anthropic/claude-sonnet-5-5";
++const CLAUDE_MODEL = process.env.AIDLC_PARITY_CLAUDE_MODEL ?? "claude-sonnet-5-5";
++const KEEP = process.env.AIDLC_KEEP_TEMP === "1";
++
++const ENABLED =
++  LIVE &&
++  KEY !== "" &&
++  BIN !== "" &&
++  existsSync(BIN) &&
++  Bun.which("claude") !== null &&
++  existsSync(join(REPO_ROOT, "dist", "harness")) &&
++  existsSync(join(REPO_ROOT, "dist", "claude"));
++const live = ENABLED ? test : test.skip;
++
++const REQUEST =
++  "total() in src/invoice.ts subtracts the discount percentage as if it were an amount in cents: " +
++  "total(lines, 10) on a 3000-cent invoice returns 2990 instead of 2700, and `bun run test` fails on " +
++  '"total applies a percentage discount". Fix the discount calculation.';
++const PROMPT = `/aidlc --scope bugfix ${REQUEST}`;
++const CONTINUE = "Continue the AI-DLC workflow.";
++const MAX_TURNS = 8;
++const TURN_TIMEOUT_MS = 90 * 60_000;
++
++const LIFECYCLE_EVENTS = new Set([
++  "WORKFLOW_STARTED",
++  "WORKFLOW_COMPLETED",
++  "PHASE_STARTED",
++  "PHASE_COMPLETED",
++  "PHASE_VERIFIED",
++  "PHASE_SKIPPED",
++  "STAGE_STARTED",
++  "STAGE_AWAITING_APPROVAL",
++  "STAGE_REVISING",
++  "STAGE_COMPLETED",
++  "STAGE_JUMPED",
++  "STAGE_SKIPPED",
++  "WORKSPACE_SCAFFOLDED",
++  "WORKSPACE_SCANNED",
++  "WORKSPACE_INITIALISED",
++  "GATE_APPROVED",
++  "GATE_REJECTED",
++  "SUMMARY_CONFIRMATION_RECORDED",
++  "VERIFICATION_COMMAND_RECORDED",
++  "CONSTRUCTION_POLICY_RECORDED",
++  "CHECKPOINT_VERIFICATION_RECORDED",
++  "PLAN_APPROVAL_RECORDED",
++  "REVIEW_REQUESTED",
++  "REVIEW_COMPLETED",
++  "UNIT_STARTED",
++  "UNIT_COMPLETED",
++]);
++
++const scratch: string[] = [];
++afterAll(() => {
++  if (KEEP) {
++    console.log(`kept: ${scratch.join(" ")}`);
++    return;
++  }
++  for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
++});
++
++function tempDir(prefix: string): string {
++  const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
++  scratch.push(dir);
++  return dir;
++}
++
++function git(dir: string, ...args: string[]): void {
++  const result = spawnSync("git", ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", ...args], {
++    cwd: dir,
++    encoding: "utf-8",
++  });
++  if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
++}
++
++/** The fixture library with one distribution installed, committed as a brownfield repository. */
++function workspace(distribution: "claude" | "harness"): string {
++  const dir = tempDir(`t-parity-${distribution}-`);
++  cpSync(join(REPO_ROOT, "dist", distribution), dir, { recursive: true });
++  // No MCP servers on either host.
++  rmSync(join(dir, ".mcp.json"), { force: true });
++  cpSync(FIXTURE, dir, { recursive: true });
++  git(dir, "init", "-q");
++  git(dir, "add", "-A");
++  git(dir, "commit", "-q", "-m", "invoice library");
++  return dir;
++}
++
++type AuditRow = { timestamp: string; event: string; stage: string | null; order: number };
++
++function auditRows(dir: string): AuditRow[] {
++  const rows: AuditRow[] = [];
++  const walk = (path: string): void => {
++    for (const entry of readdirSync(path, { withFileTypes: true })) {
++      const full = join(path, entry.name);
++      if (entry.isDirectory()) walk(full);
++      else if (full.includes("/audit/") && entry.name.endsWith(".md")) {
++        for (const block of readFileSync(full, "utf-8").split(/\n---\n/)) {
++          const event = /^\*\*Event\*\*:\s*(\S+)/m.exec(block)?.[1];
++          if (!event) continue;
++          rows.push({
++            timestamp: /^\*\*Timestamp\*\*:\s*(\S+)/m.exec(block)?.[1] ?? "",
++            event,
++            stage: /^\*\*Stage\*\*:\s*(\S+)/m.exec(block)?.[1] ?? null,
++            order: rows.length,
++          });
++        }
++      }
++    }
++  };
++  const spaces = join(dir, "aidlc", "spaces");
++  if (existsSync(spaces)) walk(spaces);
++  return rows.sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.order - b.order);
++}
++
++function completed(dir: string): boolean {
++  return auditRows(dir).some((row) => row.event === "WORKFLOW_COMPLETED");
++}
++
++/** Per stage, the workflow-owned events in first-occurrence order. */
++function stageEvents(rows: AuditRow[]): Record<string, string[]> {
++  const out: Record<string, string[]> = {};
++  let stage = "(before any stage)";
++  for (const row of rows) {
++    if (row.event === "STAGE_STARTED" && row.stage) stage = row.stage;
++    if (!LIFECYCLE_EVENTS.has(row.event)) continue;
++    const key = row.stage ?? stage;
++    out[key] ??= [];
++    if (!out[key].includes(row.event)) out[key].push(row.event);
++  }
++  return out;
++}
++
++/** The record's `- [x] stage — EXECUTE` progress lines. */
++function stageProgress(dir: string): string[] {
++  const state = recordFiles(dir).find((file) => file.endsWith("aidlc-state.md"));
++  if (!state) return [];
++  return readFileSync(join(recordDir(dir), state), "utf-8")
++    .split("\n")
++    .filter((line) => /^- \[.\] [a-z0-9-]+ — /.test(line));
++}
++
++function recordDir(dir: string): string {
++  const intents = join(dir, "aidlc", "spaces", "default", "intents");
++  const active = readFileSync(join(intents, "active-intent"), "utf-8").trim();
++  return join(intents, active);
++}
++
++/** Artifact files of the intent record, engine bookkeeping and audit shards excluded. */
++function recordFiles(dir: string): string[] {
++  const root = recordDir(dir);
++  const out: string[] = [];
++  const walk = (path: string): void => {
++    for (const entry of readdirSync(path, { withFileTypes: true })) {
++      const full = join(path, entry.name);
++      if (entry.isDirectory()) {
++        if (entry.name !== ".aidlc-engine" && entry.name !== "audit") walk(full);
++      } else out.push(relative(root, full));
++    }
++  };
++  walk(root);
++  return out.sort();
++}
++
++async function harnessJourney(dir: string): Promise<void> {
++  const agentDir = tempDir("t-parity-harness-agent-");
++  const rpc = new HarnessRpc({
++    bin: BIN,
++    cwd: dir,
++    args: ["--approval-mode", "yolo", "--model", HARNESS_MODEL],
++    env: { ANTHROPIC_API_KEY: KEY, PI_CODING_AGENT_DIR: agentDir },
++  });
++  await rpc.start();
++  try {
++    await rpc.prompt(PROMPT, { timeoutMs: TURN_TIMEOUT_MS });
++    for (let turn = 1; turn < MAX_TURNS && !completed(dir); turn++) {
++      await rpc.prompt(CONTINUE, { timeoutMs: TURN_TIMEOUT_MS });
++    }
++  } finally {
++    await rpc.close();
++  }
++}
++
++async function claudeJourney(dir: string): Promise<void> {
++  const configDir = tempDir("t-parity-claude-config-");
++  const options = {
++    projectDir: dir,
++    model: CLAUDE_MODEL,
++    persistSession: true,
++    env: { CLAUDE_CONFIG_DIR: configDir },
++    timeoutMs: TURN_TIMEOUT_MS,
++  };
++  let run = await driveAidlc(PROMPT, options);
++  for (let turn = 1; turn < MAX_TURNS && !completed(dir); turn++) {
++    const session = run.resultEvent?.raw.session_id;
++    if (typeof session !== "string") throw new Error(`Claude turn ${turn} ended without a session id`);
++    run = await driveAidlc(CONTINUE, { ...options, resume: session });
++  }
++}
++
++function fixtureTests(dir: string): { status: number | null; output: string } {
++  const result = spawnSync("bun", ["run", "test"], { cwd: dir, encoding: "utf-8" });
++  return { status: result.status, output: `${result.stdout}${result.stderr}` };
++}
++
++describe("t-harness-bugfix-parity", () => {
++  live(
++    "S15/T4: a scripted bugfix journey completes on both hosts, fixes the bug, and the method's record matches",
++    async () => {
++      const claude = workspace("claude");
++      const harness = workspace("harness");
++      expect(fixtureTests(claude).status, "the fixture starts with a failing test").not.toBe(0);
++
++      await Promise.all([claudeJourney(claude), harnessJourney(harness)]);
++
++      for (const [host, dir] of [
++        ["claude", claude],
++        ["harness", harness],
++      ] as const) {
++        expect(completed(dir), `${host}: workflow completed`).toBe(true);
++        const tests = fixtureTests(dir);
++        expect(tests.status, `${host}: ${tests.output}`).toBe(0);
++      }
++
++      expect(stageProgress(harness)).toEqual(stageProgress(claude));
++      expect(stageEvents(auditRows(harness))).toEqual(stageEvents(auditRows(claude)));
++      expect(recordFiles(harness)).toEqual(recordFiles(claude));
++    },
++    4 * 60 * 60_000,
++  );
++});
+diff --git a/tests/e2e/t-harness-coexistence-live.serial.test.ts b/tests/e2e/t-harness-coexistence-live.serial.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6b4afab143da4d683db87df020458d7b8ed1caf8
+--- /dev/null
++++ b/tests/e2e/t-harness-coexistence-live.serial.test.ts
+@@ -0,0 +1,137 @@
++// covers: file:skills/aidlc/SKILL.md
++//
++// t-harness-coexistence-live.serial.test.ts — S16: one project configured for
++// both Claude Code and Coding Harness (Claude first, as an existing Claude
++// project adopting the harness would be). Each host runs AI-DLC through its own
++// distribution:
++//   - Coding Harness: `/aidlc` resolves to the harness skill rather than the
++//     Claude copy it also discovers under .claude/skills, and no framework
++//     command it runs touches .claude/, up to the first question inside the
++//     created workflow;
++//   - Claude Code: `/aidlc --doctor` passes and checks the Claude distribution,
++//     on the workflow the harness started.
++//
++// Both release projections run framework commands through the native `aidlc`,
++// so the installed `aidlc` must carry the harness distribution.
++//
++// LIVE GATE: AIDLC_HARNESS_RPC_LIVE=1 with the harness live prerequisites (see
++// t-rpc-harness-live), plus the `claude` CLI and a Claude credential for the
++// Agent SDK.
++
++import { afterAll, describe, expect, test } from "bun:test";
++import { spawnSync } from "node:child_process";
++import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { DEFAULT_SPACE, intentsDirOf } from "../harness/fixtures.ts";
++import { HarnessRpc } from "../harness/harness-rpc.ts";
++import { driveAidlc } from "../harness/sdk-drive.ts";
++
++const REPO_ROOT = join(import.meta.dir, "..", "..");
++const LIVE = process.env.AIDLC_HARNESS_RPC_LIVE === "1";
++const BIN = process.env.AIDLC_HARNESS_BIN ?? Bun.which("harness") ?? "";
++const KEY = process.env.AIDLC_HARNESS_ANTHROPIC_KEY ?? process.env.ANTHROPIC_API_KEY ?? "";
++const HARNESS_MODEL = process.env.AIDLC_HARNESS_MODEL ?? "anthropic/claude-sonnet-5-5";
++const CLAUDE_MODEL = process.env.AIDLC_PARITY_CLAUDE_MODEL ?? "claude-sonnet-5-5";
++
++const ENABLED =
++  LIVE &&
++  KEY !== "" &&
++  BIN !== "" &&
++  existsSync(BIN) &&
++  Bun.which("claude") !== null &&
++  existsSync(join(REPO_ROOT, "dist-release", "harness")) &&
++  existsSync(join(REPO_ROOT, "dist-release", "claude"));
++const live = ENABLED ? test : test.skip;
++
++const scratch: string[] = [];
++afterAll(() => {
++  for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
++});
++
++function tempDir(prefix: string): string {
++  const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
++  scratch.push(dir);
++  return dir;
++}
++
++/** The fixture library, configured for Claude Code and then for Coding Harness. */
++function coexistingProject(): string {
++  const dir = tempDir("t-coexist-");
++  cpSync(join(REPO_ROOT, "tests", "fixtures", "bugfix-invoice"), dir, { recursive: true });
++  spawnSync("git", ["init", "-q"], { cwd: dir });
++  for (const harness of ["claude", "harness"]) {
++    const configured = spawnSync(
++      process.execPath,
++      [
++        join(REPO_ROOT, "core", "tools", "aidlc-init.ts"),
++        "config",
++        "--project-dir",
++        dir,
++        "--from",
++        join(REPO_ROOT, "dist-release", harness),
++        "--harness",
++        harness,
++        "--mcp",
++        "none",
++      ],
++      { cwd: dir, encoding: "utf-8", timeout: 120_000 },
++    );
++    if (configured.status !== 0) throw new Error(`config --harness ${harness}: ${configured.stdout}${configured.stderr}`);
++  }
++  return dir;
++}
++
++function commandOf(call: { args: unknown }): string {
++  return String((call.args as { command?: unknown } | undefined)?.command ?? "");
++}
++
++describe("t-harness-coexistence-live", () => {
++  live(
++    "S16: Claude Code and Coding Harness each run AI-DLC from their own distribution in one project",
++    async () => {
++      const dir = coexistingProject();
++      const registry = join(intentsDirOf(dir, DEFAULT_SPACE), "intents.json");
++      const hasIntent = () => existsSync(registry) && readFileSync(registry, "utf-8").includes('"scope"');
++
++      const rpc = new HarnessRpc({
++        bin: BIN,
++        cwd: dir,
++        args: ["--approval-mode", "yolo", "--model", HARNESS_MODEL],
++        env: { ANTHROPIC_API_KEY: KEY, PI_CODING_AGENT_DIR: tempDir("t-coexist-agent-") },
++      });
++      await rpc.start();
++      let workflowAsked = false;
++      const outcome = await rpc.prompt(
++        "/aidlc --scope bugfix total() in src/invoice.ts subtracts the discount percentage as if it were cents",
++        {
++          stopWhen: (frame) => {
++            if (frame.type === "extension_ui_request" && frame.method === "ask" && hasIntent()) workflowAsked = true;
++            return workflowAsked && frame.type === "tool_execution_end" && frame.toolName === "ask";
++          },
++        },
++      );
++      await rpc.close();
++
++      expect(hasIntent(), "the harness created the workflow").toBe(true);
++      const touched = outcome.toolCalls.map((call) => JSON.stringify(call.args ?? {}));
++      expect(touched.filter((args) => args.includes(".claude/skills/aidlc")), "the Claude skill was read").toEqual([]);
++      const engine = outcome.toolCalls
++        .filter((call) => call.toolName === "bash" && !call.isError)
++        .map(commandOf)
++        .filter((command) => /^aidlc\s|\/(?:tools|hooks)\/aidlc[a-z-]*\.ts/.test(command.trim()));
++      expect(engine.length, "framework commands ran").toBeGreaterThan(0);
++      expect(engine.filter((command) => command.includes(".claude/")), engine.join("\n")).toEqual([]);
++
++      const doctor = await driveAidlc("/aidlc --doctor", {
++        projectDir: dir,
++        model: CLAUDE_MODEL,
++        timeoutMs: 10 * 60_000,
++      });
++      const report = doctor.toolResults.find((result) => result.resultText.includes("AI-DLC doctor"));
++      expect(report?.resultText).toContain("Project (.claude, Claude Code)");
++      expect(report?.resultText).toMatch(/\b0 problems\b/);
++    },
++    30 * 60_000,
++  );
++});
 diff --git a/tests/e2e/t-rpc-harness-live.serial.test.ts b/tests/e2e/t-rpc-harness-live.serial.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..83629e747f86d22ab4c2eb6ab859b04795f665be
+index 0000000000000000000000000000000000000000..2dae06fc1f1ba0aebb5479008ade643020e7bf28
 --- /dev/null
 +++ b/tests/e2e/t-rpc-harness-live.serial.test.ts
-@@ -0,0 +1,378 @@
+@@ -0,0 +1,388 @@
 +// covers: file:skills/aidlc/SKILL.md, hook:aidlc-session-start, hook:aidlc-session-end, hook:aidlc-plan-approval-guard, hook:aidlc-state-transition-guard, hook:aidlc-run-sensors
 +//
 +// t-rpc-harness-live.serial.test.ts — drive the shipped dist/harness tree
 +// through Coding Harness's RPC mode (`harness --mode rpc-ui --no-ui`) with real
 +// model turns and scripted `ask` answers, and assert on the project's on-disk
 +// state and the tool results the model saw:
-+//   - S1/S10/S11: `/aidlc` starts a bugfix through structured questions; the
-+//     session is recorded start to end and its usage reaches the ledger.
++//   - S1/S3/S10/S11: `/aidlc` starts a bugfix through structured questions that
++//     open with no option pre-selected; a stage dispatch carries its rule
++//     bundle; the session is recorded start to end and its usage reaches the
++//     ledger.
 +//   - S2: an edit before the code-generation plan is approved is refused.
 +//   - S6: a write that fires a sensor returns the verdict to the model.
 +//   - S7: a direct state-transition verb through bash is refused.
++//   - S8: ending the turn mid-workflow is answered with a continuation.
++//   - S9: compaction leaves the recovery breadcrumb.
++//   - S12: an agent's configured thinking level reaches its spawned session.
++//   - S14: a space switch changes the method memory the next turn sees.
 +//
 +// LIVE GATE: requires AIDLC_HARNESS_RPC_LIVE=1, Coding Harness >= 1.1.0
 +// (AIDLC_HARNESS_BIN or `harness` on PATH) and an Anthropic credential in
@@ -353,6 +809,10 @@ index 0000000000000000000000000000000000000000..83629e747f86d22ab4c2eb6ab859b047
 +
 +      expect(["completed", "aborted"]).toContain(outcome.status);
 +      expect(outcome.asks.length, "the conductor asked through the ask tool").toBeGreaterThan(1);
++      // Every ask records a human decision, so none opens with an option pre-selected.
++      for (const ask of outcome.asks) {
++        for (const question of ask.questions) expect(question, question.id).not.toHaveProperty("recommended");
++      }
 +      const registryText = readFileSync(registry, "utf-8");
 +      const intents = JSON.parse(registryText) as Array<{ scope?: string }>;
 +      // The plan the conductor proposes (stock bugfix or a composed grid) is the
@@ -555,6 +1015,82 @@ index 0000000000000000000000000000000000000000..83629e747f86d22ab4c2eb6ab859b047
 +    },
 +    10 * 60_000,
 +  );
++});
+diff --git a/tests/fixtures/bugfix-invoice/README.md b/tests/fixtures/bugfix-invoice/README.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..d6384ea60f6def3e7fcf74e364d9622553578d3b
+--- /dev/null
++++ b/tests/fixtures/bugfix-invoice/README.md
+@@ -0,0 +1,8 @@
++# invoice
++
++Invoice totals in cents, as a TypeScript library for Bun.
++
++Run the tests with `bun run test`.
++
++The library is consumed from source by other packages in the same repository.
++It has no build step, no CI pipeline and no deployment target.
+diff --git a/tests/fixtures/bugfix-invoice/package.json b/tests/fixtures/bugfix-invoice/package.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..594382e4035f33d19ca5cced723008035c366d18
+--- /dev/null
++++ b/tests/fixtures/bugfix-invoice/package.json
+@@ -0,0 +1,9 @@
++{
++  "name": "invoice",
++  "private": true,
++  "version": "1.0.0",
++  "type": "module",
++  "scripts": {
++    "test": "bun test ./test/invoice.check.ts"
++  }
++}
+diff --git a/tests/fixtures/bugfix-invoice/src/invoice.ts b/tests/fixtures/bugfix-invoice/src/invoice.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..79c1e5432bca83db45c15d2b38299f883649e06f
+--- /dev/null
++++ b/tests/fixtures/bugfix-invoice/src/invoice.ts
+@@ -0,0 +1,16 @@
++export interface Line {
++  description: string;
++  /** Price of one unit, in cents. */
++  unitPrice: number;
++  quantity: number;
++}
++
++/** Sum of the line totals, in cents. */
++export function subtotal(lines: Line[]): number {
++  return lines.reduce((sum, line) => sum + line.unitPrice * line.quantity, 0);
++}
++
++/** The subtotal after a percentage discount (0-100), rounded to whole cents. */
++export function total(lines: Line[], discountPercent = 0): number {
++  return Math.round(subtotal(lines) - discountPercent);
++}
+diff --git a/tests/fixtures/bugfix-invoice/test/invoice.check.ts b/tests/fixtures/bugfix-invoice/test/invoice.check.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..0494e579274230771ef6d28f91e90b1810a6b680
+--- /dev/null
++++ b/tests/fixtures/bugfix-invoice/test/invoice.check.ts
+@@ -0,0 +1,19 @@
++import { expect, test } from "bun:test";
++import { subtotal, total } from "../src/invoice.ts";
++
++const lines = [
++  { description: "Widget", unitPrice: 1250, quantity: 2 },
++  { description: "Gadget", unitPrice: 500, quantity: 1 },
++];
++
++test("subtotal sums the line totals", () => {
++  expect(subtotal(lines)).toBe(3000);
++});
++
++test("total without a discount is the subtotal", () => {
++  expect(total(lines)).toBe(3000);
++});
++
++test("total applies a percentage discount", () => {
++  expect(total(lines, 10)).toBe(2700);
 +});
 diff --git a/tests/harness/harness-rpc.ts b/tests/harness/harness-rpc.ts
 new file mode 100644
@@ -827,6 +1363,32 @@ index 0000000000000000000000000000000000000000..751f892f62c8daa62907b2f16f87ae46
 +    return code;
 +  }
 +}
+diff --git a/tests/harness/sdk-drive.ts b/tests/harness/sdk-drive.ts
+index 16f2b62628628dfaaee37055f2b98c2be328af41..7902741820838e184376b79c56b6ad18d00d6999 100644
+--- a/tests/harness/sdk-drive.ts
++++ b/tests/harness/sdk-drive.ts
+@@ -289,6 +289,13 @@ export interface DriveOptions {
+    * drives that intentionally abort at a tool or question boundary.
+    */
+   persistSession?: boolean;
++  /**
++   * Continue a persisted session (its `resultEvent.raw.session_id`) with this
++   * prompt, for journeys that span several turns. Pass the same
++   * `env.CLAUDE_CONFIG_DIR` as the first drive: the default config directory
++   * is removed after each drive, taking the transcript with it.
++   */
++  resume?: string;
+   /** Extra env to layer onto the SDK subprocess (e.g. Bedrock overrides). */
+   env?: Record<string, string>;
+   /**
+@@ -543,6 +550,7 @@ export async function driveAidlc(
+         // Each drive has its own config directory. Natural-completion tests
+         // need the transcript that Stop hooks inspect before accepting a stop.
+         persistSession: opts.persistSession ?? false,
++        ...(opts.resume ? { resume: opts.resume } : {}),
+         ...(sdkSettings.model ? { model: sdkSettings.model } : {}),
+         ...(Object.keys(sdkSettings.env).length > 0 ? { env: sdkSettings.env } : {}),
+         canUseTool: async (toolName, input, permissionOptions) => {
 diff --git a/tests/lib/test-matrix.ts b/tests/lib/test-matrix.ts
 index fb7ad65c0739a3681c31b358572569d4c7010fb0..a04778708eec0d23a329e80926cc52735f18f224 100644
 --- a/tests/lib/test-matrix.ts
@@ -852,12 +1414,29 @@ index be3fa4d80a53b91f9582ae6cadd880d5e180bf8b..d606b9f7d730131c673a8bdd54e19bd9
  ] as const;
  
  type Level = "smoke" | "unit" | "integration" | "e2e";
+diff --git a/tests/unit/gen-coverage-registry.test.ts b/tests/unit/gen-coverage-registry.test.ts
+index bd12e123fb215a42bc80b439f983a4bc54bfe4ff..da7db72f146e8b034eea9050c1da5a08563a3b51 100644
+--- a/tests/unit/gen-coverage-registry.test.ts
++++ b/tests/unit/gen-coverage-registry.test.ts
+@@ -1200,6 +1200,12 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
+     "e2e/t12-bolt-runtime-graph-fork.test.ts",
+     "e2e/t134-swarm-referee.test.ts",
+     "e2e/t138-scope-exclusion-counts.test.ts",
++    // The Coding Harness tests drive the shipped engine tools (doctor, config,
++    // review and state commands, aidlc-init) as subprocesses to build fixtures.
++    "unit/t-harness-config-doctor.test.ts",
++    "unit/t-harness-hook-contracts.test.ts",
++    "e2e/t-rpc-harness-live.serial.test.ts",
++    "e2e/t-harness-coexistence-live.serial.test.ts",
+     // t-ide-kiro constructs its approval-gate fixture by spawning the real
+     // shipped tools (runSetupTool), so its body is a deterministic spawner
+     // even though its filename segment carries no mechanism.
 diff --git a/tests/unit/t-harness-adapter-map.test.ts b/tests/unit/t-harness-adapter-map.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..c9cd60ee8871ce5bf1296820dd595858fbf6cd78
+index 0000000000000000000000000000000000000000..28f24288bac5ad080b1b95b882f90a73442b06c8
 --- /dev/null
 +++ b/tests/unit/t-harness-adapter-map.test.ts
-@@ -0,0 +1,274 @@
+@@ -0,0 +1,362 @@
 +// t-harness-adapter-map: the Coding Harness adapter's event → core-hook mapping,
 +// exercised through its runCore seam (no subprocesses). Covers the decisions the
 +// adapter itself makes: which hooks run for which tool and agent, how a hook's
@@ -865,7 +1444,7 @@ index 0000000000000000000000000000000000000000..c9cd60ee8871ce5bf1296820dd595858
 +// batch dispatch, and what never reaches a hook (main-only events in subagents,
 +// chained framework shell commands).
 +//
-+// covers: function:claudeCalls, function:taskItems, function:withTaskAssignments, function:bashBoundaryViolation, function:realPath, function:parseSensorFeedback, function:formatSensorFeedback, function:activeTodo
++// covers: function:claudeCalls, function:taskItems, function:withTaskAssignments, function:withoutRecommended, function:askHookFields, function:bashBoundaryViolation, function:realPath, function:parseSensorFeedback, function:formatSensorFeedback, function:activeTodo
 +
 +import { describe, expect, test } from "bun:test";
 +import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -937,6 +1516,19 @@ index 0000000000000000000000000000000000000000..c9cd60ee8871ce5bf1296820dd595858
 +    expect(bashBoundaryViolation("bun .harness-aidlc/tools/aidlc-orchestrate.ts next > out", shipped)).not.toBeNull();
 +    expect(bashBoundaryViolation("bun .harness-aidlc/tools/evil.ts", shipped)).not.toBeNull();
 +    expect(bashBoundaryViolation("npm test && echo done", shipped)).toBeNull();
++  });
++
++  test("another tool's copy of the framework in the same project is refused, naming this distribution's", () => {
++    const shipped = new Set(["tools/aidlc.ts"]);
++    for (const command of [
++      "bun .claude/tools/aidlc.ts engine orchestrate next",
++      "bun ./.aidlc/tools/aidlc-state.ts approve",
++      "bun .claude/hooks/aidlc-continue-workflow.ts",
++    ]) {
++      expect(bashBoundaryViolation(command, shipped), command).toContain("from .harness-aidlc/tools/");
++    }
++    expect(bashBoundaryViolation("bun .harness-aidlc/tools/aidlc.ts engine orchestrate next", shipped)).toBeNull();
++    expect(bashBoundaryViolation("bun scripts/build.ts", shipped)).toBeNull();
 +  });
 +});
 +
@@ -1038,9 +1630,62 @@ index 0000000000000000000000000000000000000000..c9cd60ee8871ce5bf1296820dd595858
 +    const result = await emit("tool_call", { toolName: "task", input: { agent: "aidlc-developer-agent", task: "build" } });
 +    expect(result).toEqual({ block: true, reason: "rules missing" });
 +  });
++
++  test("an ask never pre-selects an option: recommended is dropped and the rest of the question kept", async () => {
++    const { emit } = load();
++    const gate = {
++      questions: [
++        {
++          id: "approval",
++          question: "Requirements complete. How would you like to proceed?",
++          options: [{ label: "Approve" }, { label: "Request Changes" }],
++          recommended: 0,
++        },
++        { id: "depth", question: "Depth?", options: [{ label: "Minimal" }, { label: "Standard" }] },
++      ],
++    };
++    expect(await emit("tool_call", { toolName: "ask", input: gate })).toEqual({
++      input: {
++        questions: [
++          { id: "approval", question: "Requirements complete. How would you like to proceed?", options: [{ label: "Approve" }, { label: "Request Changes" }] },
++          gate.questions[1],
++        ],
++      },
++    });
++    expect(await emit("tool_call", { toolName: "ask", input: { questions: [gate.questions[1]] } })).toBeUndefined();
++  });
 +});
 +
 +describe("tool_result", () => {
++  test("an answered ask reaches record-human-turn with each question's own answer", async () => {
++    const { emit, calls } = load();
++    const input = {
++      questions: [
++        { id: "depth", question: "Which depth?", options: [{ label: "Minimal" }, { label: "Standard" }] },
++        { id: "areas", question: "Which areas?", options: [{ label: "API" }, { label: "UI" }], multi: true },
++        { id: "name", question: "Release name?", options: [{ label: "Keep" }, { label: "Rename" }] },
++      ],
++    };
++    await emit("tool_result", {
++      toolName: "ask",
++      input,
++      content: [{ type: "text", text: "User answers: ..." }],
++      details: {
++        results: [
++          { id: "depth", question: "Which depth?", selectedOptions: ["Standard"] },
++          { id: "areas", question: "Which areas?", selectedOptions: ["API", "UI"] },
++          { id: "name", question: "Release name?", selectedOptions: [], customInput: "Orchid" },
++        ],
++      },
++      isError: false,
++    });
++    const turn = calls.find((call) => call.hook === "record-human-turn")?.input;
++    expect(turn?.tool_input).toEqual(input);
++    expect(turn?.tool_response).toEqual({
++      answers: { "Which depth?": "Standard", "Which areas?": "API, UI", "Release name?": "Orchid" },
++    });
++  });
++
 +  test("a multi-file edit audits and senses every file, and failing verdicts reach the model", async () => {
 +    const { emit, calls } = load({
 +      "run-sensors": (input) => {
@@ -1084,6 +1729,28 @@ index 0000000000000000000000000000000000000000..c9cd60ee8871ce5bf1296820dd595858
 +});
 +
 +describe("main-session lifecycle", () => {
++  test("session start names this distribution for the commands the session spawns; a subagent start does not", async () => {
++    const saved = { dir: process.env.AIDLC_HARNESS_DIR, name: process.env.AIDLC_HARNESS_NAME };
++    try {
++      delete process.env.AIDLC_HARNESS_DIR;
++      delete process.env.AIDLC_HARNESS_NAME;
++      const { emit } = load();
++      await emit("session_start", { reason: "startup" }, "sub");
++      expect(process.env.AIDLC_HARNESS_DIR).toBeUndefined();
++      await emit("session_start", { reason: "startup" });
++      expect(process.env.AIDLC_HARNESS_DIR).toBe(".harness-aidlc");
++      expect(process.env.AIDLC_HARNESS_NAME).toBe("harness");
++    } finally {
++      for (const [key, value] of [
++        ["AIDLC_HARNESS_DIR", saved.dir],
++        ["AIDLC_HARNESS_NAME", saved.name],
++      ] as const) {
++        if (value === undefined) delete process.env[key];
++        else process.env[key] = value;
++      }
++    }
++  });
++
 +  test("Stop blocks only on the core hook's block decision", async () => {
 +    const blocking = load({
 +      "continue-workflow": () => ({ stdout: JSON.stringify({ decision: "block", reason: "next stage pending" }), stderr: "", code: 0 }),
@@ -1134,10 +1801,10 @@ index 0000000000000000000000000000000000000000..c9cd60ee8871ce5bf1296820dd595858
 +});
 diff --git a/tests/unit/t-harness-config-doctor.test.ts b/tests/unit/t-harness-config-doctor.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..139bb0c58d51eecc4c6736b560a2f39fc0c5f78c
+index 0000000000000000000000000000000000000000..e19a3ec343899f19515e59f75bcfd66377ece26d
 --- /dev/null
 +++ b/tests/unit/t-harness-config-doctor.test.ts
-@@ -0,0 +1,118 @@
+@@ -0,0 +1,159 @@
 +// t-harness-config-doctor: configuration and diagnosis of a Coding Harness
 +// project (a copy of the shipped dist/harness tree), through the engine's own
 +// commands:
@@ -1146,7 +1813,9 @@ index 0000000000000000000000000000000000000000..139bb0c58d51eecc4c6736b560a2f39f
 +//   - a model-policy preset rewrites the task agents' thinkingLevel per tier;
 +//   - a space switch re-points the method include and every persona's method
 +//     paths, and the adapter's next system-prompt injection carries the new
-+//     space's memory.
++//     space's memory;
++//   - the Claude and harness distributions configured into one project each
++//     pass their own doctor, which names the distribution it checks.
 +//
 +// covers: function:repointHarnessIncludes, function:repointHarnessIncludesJson, function:buildConstitution
 +
@@ -1172,17 +1841,21 @@ index 0000000000000000000000000000000000000000..139bb0c58d51eecc4c6736b560a2f39f
 +  return dir;
 +}
 +
-+function aidlc(dir: string, ...args: string[]): { code: number; out: string } {
++function aidlcIn(engine: string, dir: string, ...args: string[]): { code: number; out: string } {
 +  const env = { ...process.env };
 +  delete env.AIDLC_PROJECT_DIR;
 +  delete env.CLAUDE_PROJECT_DIR;
-+  const result = spawnSync(process.execPath, [join(ENGINE, "tools", "aidlc.ts"), ...args], {
++  const result = spawnSync(process.execPath, [join(engine, "tools", "aidlc.ts"), ...args], {
 +    cwd: dir,
 +    encoding: "utf-8",
 +    env,
 +    timeout: 120_000,
 +  });
 +  return { code: result.status ?? -1, out: `${result.stdout}${result.stderr}` };
++}
++
++function aidlc(dir: string, ...args: string[]): { code: number; out: string } {
++  return aidlcIn(ENGINE, dir, ...args);
 +}
 +
 +function frontmatterValue(text: string, key: string): string | null {
@@ -1207,6 +1880,41 @@ index 0000000000000000000000000000000000000000..139bb0c58d51eecc4c6736b560a2f39f
 +    const result = aidlc(dir, "doctor", "--project-dir", dir);
 +    expect(result.code).toBe(1);
 +    expect(result.out).toContain("fail  .harness/extensions/aidlc.ts is not gitignored");
++  });
++});
++
++describe("coexistence", () => {
++  test("Claude and harness distributions in one project each pass the doctor that names them", () => {
++    const dir = realpathSync(mkdtempSync(join(tmpdir(), "t-harness-coexist-")));
++    scratch.push(dir);
++    spawnSync("git", ["init", "-q"], { cwd: dir });
++    for (const harness of ["claude", "harness"]) {
++      const configured = spawnSync(
++        process.execPath,
++        [
++          join(REPO_ROOT, "core", "tools", "aidlc-init.ts"),
++          "config",
++          "--project-dir",
++          dir,
++          "--from",
++          join(REPO_ROOT, "dist-release", harness),
++          "--harness",
++          harness,
++          "--mcp",
++          "none",
++        ],
++        { cwd: dir, encoding: "utf-8", timeout: 120_000 },
++      );
++      expect(configured.status, `${configured.stdout}${configured.stderr}`).toBe(0);
++    }
++    for (const [engine, heading] of [
++      [".claude", "Project (.claude, Claude Code)"],
++      [ENGINE, "Project (.harness-aidlc, Coding Harness)"],
++    ]) {
++      const doctor = aidlcIn(engine, dir, "doctor", "--project-dir", dir);
++      expect(doctor.code, doctor.out).toBe(0);
++      expect(doctor.out).toContain(heading);
++    }
 +  });
 +});
 +
@@ -1388,10 +2096,10 @@ index 0000000000000000000000000000000000000000..3abf35384719ec8b2b9de5a15325054e
 +});
 diff --git a/tests/unit/t-harness-hook-contracts.test.ts b/tests/unit/t-harness-hook-contracts.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..4c8a30fb7ccc9f823f61fbbf02c7496a56dc88e6
+index 0000000000000000000000000000000000000000..ce62a2a744ce392d19fa50b24e9db87f0af0d196
 --- /dev/null
 +++ b/tests/unit/t-harness-hook-contracts.test.ts
-@@ -0,0 +1,340 @@
+@@ -0,0 +1,397 @@
 +// t-harness-hook-contracts: the shipped Coding Harness adapter (dist/harness),
 +// driven through synthetic harness events, runs the REAL core hooks through its
 +// production dispatcher (`bun .harness-aidlc/tools/aidlc.ts engine hook <name>`)
@@ -1421,6 +2129,7 @@ index 0000000000000000000000000000000000000000..4c8a30fb7ccc9f823f61fbbf02c7496a
 +  writeActiveDirectiveMarker,
 +  writeSessionPidEntry,
 +} from "../../core/tools/aidlc-lib.ts";
++import { renderTestingContract, resolveTestingPosture } from "../../core/tools/aidlc-testing-posture.ts";
 +import {
 +  DEFAULT_RECORD_DIR,
 +  DEFAULT_SPACE,
@@ -1560,6 +2269,62 @@ index 0000000000000000000000000000000000000000..4c8a30fb7ccc9f823f61fbbf02c7496a
 +      isError: false,
 +    });
 +    expect(count(audit(dir), "HUMAN_TURN")).toBe(afterPrompt + 1);
++  });
++
++  test("a Plan Approval picked through ask is the human answer the approval receipt binds to", async () => {
++    const { dir, sessionFile } = project();
++    const state = readFileSync(seededStateFile(dir), "utf-8").replace(
++      /(- \*\*Current Stage\*\*:\s*)[^\n]+/,
++      "$1code-generation",
++    );
++    writeFileSync(seededStateFile(dir), state);
++    writeActiveDirectiveMarker(dir, { kind: "run-stage", stage: "code-generation", state_sha256: stateDigest(state) });
++    const stageDir = join(seededRecordDir(dir), "construction", "code-generation");
++    mkdirSync(stageDir, { recursive: true });
++    const tool = (name: string, args: string[]) => {
++      const env = { ...process.env };
++      delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
++      return spawnSync(process.execPath, [join(dir, ".harness-aidlc", "tools", name), ...args, "--project-dir", dir], {
++        cwd: dir,
++        encoding: "utf-8",
++        env,
++      });
++    };
++    writeFileSync(
++      join(stageDir, "code-generation-plan.md"),
++      `# Plan\n\n${renderTestingContract(resolveTestingPosture(dir))}\n## Steps\n\n- [ ] Fix total()\n`,
++    );
++    writeFileSync(join(stageDir, "unit-test-instructions.md"), "# Unit Test Instructions\n\n## Command\n\n`bun test`\n");
++    const fingerprint = tool("aidlc-testing-posture.ts", ["fingerprint", "--stage-level"]);
++    expect(fingerprint.status, fingerprint.stderr).toBe(0);
++    const questionsFile = join(stageDir, "code-generation-questions.md");
++    writeFileSync(questionsFile, `## Plan Approval\n${fingerprint.stdout.trim()}\n[Answer]:\n`);
++    const prompt = "Approve this exact Code Generation plan?";
++    const identity = [
++      "--stage",
++      "code-generation",
++      "--checkpoint",
++      "plan-approval",
++      "--questions-file",
++      questionsFile,
++      "--session",
++      SESSION_ID,
++      "--stage-level",
++    ];
++    const decision = tool("aidlc-log.ts", ["decision", ...identity, "--decision", prompt, "--options", "Approve Plan,Request Changes"]);
++    expect(decision.status, `${decision.stdout}${decision.stderr}`).toBe(0);
++
++    await harness(dir, sessionFile)("tool_result", {
++      toolName: "ask",
++      input: { questions: [{ id: "plan", question: prompt, options: [{ label: "Approve Plan" }, { label: "Request Changes" }] }] },
++      content: [{ type: "text", text: "User selected: Approve Plan" }],
++      details: { question: prompt, options: ["Approve Plan", "Request Changes"], multi: false, selectedOptions: ["Approve Plan"] },
++      isError: false,
++    });
++    writeFileSync(questionsFile, readFileSync(questionsFile, "utf-8").replace(/\[Answer\]:\n$/, "[Answer]: Approve Plan\n"));
++    const answered = tool("aidlc-log.ts", ["answer", ...identity, "--details", "Approve Plan"]);
++    expect(answered.status, `${answered.stdout}${answered.stderr}`).toBe(0);
++    expect(audit(dir)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
 +  });
 +
 +  test("an edit during code-generation without an approved plan is blocked with the guard's reason", async () => {

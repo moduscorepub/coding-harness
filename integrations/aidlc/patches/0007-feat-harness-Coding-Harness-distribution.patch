@@ -18,18 +18,18 @@ distribution.
  README.md                                     |   1 +
  docs/guide/glossary.md                        |   4 +-
  docs/guide/harnesses/README.md                |   1 +
- docs/guide/harnesses/coding-harness.md        | 121 +++
+ docs/guide/harnesses/coding-harness.md        | 141 +++
  docs/harness-engineering/00-overview.md       |   2 +-
  docs/reference/01-architecture.md             |   5 +-
  docs/reference/14-claude-features.md          |   2 +-
  harness/harness/dot-gitignore                 |  83 ++
- harness/harness/emit.ts                       | 267 ++++++
- harness/harness/host/adapter.ts               | 890 ++++++++++++++++++
+ harness/harness/emit.ts                       | 272 +++++
+ harness/harness/host/adapter.ts               | 953 ++++++++++++++++++
  harness/harness/host/prompts/aidlc.md         |  14 +
  harness/harness/manifest.ts                   |  84 ++
  harness/harness/onboarding.fills.ts           |  42 +
- harness/harness/skills/aidlc/SKILL.md         | 324 +++++++
- .../skills/aidlc/question-rendering.md        | 168 ++++
+ harness/harness/skills/aidlc/SKILL.md         | 324 ++++++
+ .../skills/aidlc/question-rendering.md        | 169 ++++
  tests/harness/harness-matrix.ts               |  27 +-
  .../t123-skills-spec-conformance.test.ts      |   1 +
  tests/unit/t151-onboarding-skeleton.test.ts   |   4 +-
@@ -41,7 +41,7 @@ distribution.
  .../t294-document-extractors-seam.test.ts     |   1 +
  .../t304-round18-acceptance-fixes.test.ts     |  10 +-
  tests/unit/t315-plugin-build.test.ts          |   1 +
- 26 files changed, 2078 insertions(+), 14 deletions(-)
+ 26 files changed, 2167 insertions(+), 14 deletions(-)
  create mode 100644 docs/guide/harnesses/coding-harness.md
  create mode 100644 harness/harness/dot-gitignore
  create mode 100644 harness/harness/emit.ts
@@ -98,10 +98,10 @@ index 3ffba8ce8dc1665b2e8948d925185ee9fa06f017..a1b14d5a2272a5015f2a69eec22c6ff6
  
 diff --git a/docs/guide/harnesses/coding-harness.md b/docs/guide/harnesses/coding-harness.md
 new file mode 100644
-index 0000000000000000000000000000000000000000..21fa8fae3412cd7ccb1cda11f93f5420b3b468a2
+index 0000000000000000000000000000000000000000..b12d26ad4f738cb4056c8b3ade281fbb763343bf
 --- /dev/null
 +++ b/docs/guide/harnesses/coding-harness.md
-@@ -0,0 +1,121 @@
+@@ -0,0 +1,141 @@
 +# AI-DLC on Coding Harness
 +
 +The `harness` runtime is the framework's distribution for **Coding Harness**
@@ -192,9 +192,10 @@ index 0000000000000000000000000000000000000000..21fa8fae3412cd7ccb1cda11f93f5420
 +
 +## What's different on Coding Harness
 +
-+- **Structured questions use the `ask` tool.** An answer the `ask` timeout
-+  selected is not a human decision: it records no human presence and the
-+  conductor re-asks. Gate questions never carry a recommended option.
++- **Structured questions use the `ask` tool.** The adapter removes a
++  `recommended` option from every `ask` call, so no human decision opens with
++  an option pre-selected. An answer the `ask` timeout selected is not a human
++  decision: it records no human presence and the conductor re-asks.
 +- **Sensor results reach the model.** After a write, the sensors' verdicts
 +  (failures with their detail excerpt) reach the model as context right after
 +  the tool result, so it fixes the artifact in the same turn. Set
@@ -212,6 +213,25 @@ index 0000000000000000000000000000000000000000..21fa8fae3412cd7ccb1cda11f93f5420
 +- **Plugins** compose the way they do on opencode: build the plugin for the
 +  `harness` target, then run `PLUGIN_ROOT=<built plugin> aidlc plugin sync`.
 +  Plugin personas land in `.harness-aidlc/host/agents/` as task agents.
++
++## Alongside Claude Code
++
++One project can carry both distributions: run `aidlc config --harness claude`
++and `aidlc config --harness harness` in either order. Each host runs AI-DLC from
++its own tree and both share the workflow under `aidlc/`.
++
++- **`/aidlc` is the harness skill.** Coding Harness also reads `.claude/skills`;
++  from version 1.1.0 a skill an extension contributes replaces another tool's
++  skill of the same name, so the `aidlc` skill here is this distribution's.
++- **Framework commands resolve this tree.** The adapter sets
++  `AIDLC_HARNESS_DIR=.harness-aidlc` for the commands a session runs, so
++  `aidlc …` acts on `.harness-aidlc/`, and it refuses `bun .claude/tools/…`
++  with the path to use instead.
++- **Project context.** Coding Harness prefers `.claude/CLAUDE.md` over
++  `AGENTS.md` as the project's context file. Its Claude-specific notes reach the
++  model, but the method itself arrives through the adapter either way.
++- **Doctor.** Each tree's `aidlc doctor` checks its own wiring and names it in
++  the Project heading.
 +
 +## Troubleshooting
 +
@@ -363,10 +383,10 @@ index 0000000000000000000000000000000000000000..965d3b76e3a21e4315eb2ca71d6542cf
 +# aidlc/spaces/*/intents/*/<phase>/<stage>/*.md (artifacts + diary).
 diff --git a/harness/harness/emit.ts b/harness/harness/emit.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..22870686d678ce4904de53b97629483e5240ce95
+index 0000000000000000000000000000000000000000..cdab7b12b16d17a0dfe93772a9b5abeb62d07aab
 --- /dev/null
 +++ b/harness/harness/emit.ts
-@@ -0,0 +1,267 @@
+@@ -0,0 +1,272 @@
 +// harness/harness/emit.ts — the Coding Harness per-shell emission plugin.
 +//
 +// The unified packager copies core/ → dist/harness/.harness-aidlc/ and runs graph
@@ -506,6 +526,11 @@ index 0000000000000000000000000000000000000000..22870686d678ce4904de53b97629483e
 +  },
 +  { from: /`AskUserQuestion`/g, to: "`ask`", label: "ask tool name" },
 +  { from: /AskUserQuestion/g, to: "ask", label: "ask tool mention" },
++  {
++    from: /tell the user to `\/clear` \(or restart Claude Code\), then invoke `\/aidlc`/g,
++    to: "tell the user to start a new session with `/new`, then invoke `/aidlc`",
++    label: "fresh session",
++  },
 +];
 +
 +export function deriveSkill(claudeSkill: string): string {
@@ -515,7 +540,7 @@ index 0000000000000000000000000000000000000000..22870686d678ce4904de53b97629483e
 +    rule.from.lastIndex = 0;
 +    text = text.replace(rule.from, rule.to);
 +  }
-+  for (const forbidden of [/\.claude\//, /AskUserQuestion/, /companyAnnouncements/, /\bTask\(/]) {
++  for (const forbidden of [/\.claude\//, /AskUserQuestion/, /companyAnnouncements/, /\bTask\(/, /Claude Code/]) {
 +    if (forbidden.test(text)) throw new Error(`harness SKILL.md derivation left Claude-only text: ${forbidden}`);
 +  }
 +  return text;
@@ -636,10 +661,10 @@ index 0000000000000000000000000000000000000000..22870686d678ce4904de53b97629483e
 +}
 diff --git a/harness/harness/host/adapter.ts b/harness/harness/host/adapter.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..108090675aa0eac550405fe9201e8e519d414a13
+index 0000000000000000000000000000000000000000..d2e116b55f5785e68ac69e4ca2b73f14900df376
 --- /dev/null
 +++ b/harness/harness/host/adapter.ts
-@@ -0,0 +1,890 @@
+@@ -0,0 +1,953 @@
 +// harness/harness/host/adapter.ts — the Coding Harness hook adapter (AUTHORED
 +// shell file; the aidlc-*.ts hook bodies in <project>/{{HARNESS_DIR}}/hooks/ are
 +// PACKAGED core, shared byte-for-byte with every other distribution).
@@ -658,6 +683,7 @@ index 0000000000000000000000000000000000000000..108090675aa0eac550405fe9201e8e51
 +//   tool_call task                         → deliver-stage-rules + plan-approval-guard (PreToolUse Task)
 +//   tool_call file and bash tools          → state-transition-guard, reviewer-scope, review-freeze,
 +//                                            plan-approval-guard      (PreToolUse)
++//   tool_call ask                          → (adapter) drops `recommended` from every question
 +//   tool_result write/edit/ast_edit        → write-audit-log, run-sensors (PostToolUse Write|Edit)
 +//   tool_result todo                       → sync-workflow-state      (PostToolUse TaskUpdate)
 +//   tool_result ask (main)                 → record-human-turn        (PostToolUse AskUserQuestion)
@@ -962,6 +988,47 @@ index 0000000000000000000000000000000000000000..108090675aa0eac550405fe9201e8e51
 +  return { ...input, task: assignments[0] };
 +}
 +
++/**
++ * Every question the method asks records a human decision. `recommended` would
++ * pre-select and badge an option and become the ask-timeout default, so it is
++ * dropped; returns null when no question carries it.
++ */
++export function withoutRecommended(input: Record<string, unknown>): Record<string, unknown> | null {
++  if (!Array.isArray(input.questions)) return null;
++  let stripped = false;
++  const questions = input.questions.map(question => {
++    if (!question || typeof question !== "object" || !("recommended" in question)) return question;
++    stripped = true;
++    const { recommended: _recommended, ...rest } = question as Record<string, unknown>;
++    return rest;
++  });
++  return stripped ? { ...input, questions } : null;
++}
++
++/**
++ * The AskUserQuestion fields a harness `ask` result maps to: the questions as
++ * asked, and per question the human's answer (the picked labels, or the text
++ * they typed instead). record-human-turn reads these to bind a Plan Approval or
++ * protected question to the option actually chosen.
++ */
++export function askHookFields(
++  input: Record<string, unknown>,
++  details: unknown,
++): { tool_input: Record<string, unknown>; tool_response: { answers: Record<string, string> } } {
++  const record = details && typeof details === "object" ? (details as Record<string, unknown>) : {};
++  const results: unknown[] = Array.isArray(record.results) ? record.results : [record];
++  const answers: Record<string, string> = {};
++  for (const result of results) {
++    if (!result || typeof result !== "object") continue;
++    const { question, selectedOptions, customInput } = result as Record<string, unknown>;
++    if (typeof question !== "string") continue;
++    const picked = Array.isArray(selectedOptions) ? selectedOptions.filter((label) => typeof label === "string") : [];
++    const answer = picked.length > 0 ? picked.join(", ") : typeof customInput === "string" ? customInput : "";
++    if (answer) answers[question] = answer;
++  }
++  return { tool_input: input, tool_response: { answers } };
++}
++
 +// ---------------------------------------------------------------------------
 +// Bash boundary: one direct invocation of a shipped framework entrypoint only.
 +// ---------------------------------------------------------------------------
@@ -1012,6 +1079,9 @@ index 0000000000000000000000000000000000000000..108090675aa0eac550405fe9201e8e51
 +const ENGINE_DIR_PATTERN = UNPROJECTED_ENGINE_DIR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 +const AIDLC_BUN_PREFIX = new RegExp(`^bun[ \\t]+${ENGINE_DIR_PATTERN}/(?:tools|hooks)/`);
 +const AIDLC_ENTRYPOINT = new RegExp(`^${ENGINE_DIR_PATTERN}/(tools|hooks)/([A-Za-z0-9][A-Za-z0-9._-]*\\.ts)$`);
++// Another tool's copy of the framework (`.claude/tools/aidlc.ts` in a project that
++// also carries the Claude distribution): its directives speak that tool's language.
++const FOREIGN_AIDLC_BUN = /^bun[ \t]+(?:\.\/)?([^\s/]+)\/(?:tools|hooks)\/aidlc(?:-[a-z0-9-]+)?\.ts(?:\s|$)/;
 +
 +export function bashBoundaryViolation(
 +  command: string,
@@ -1024,6 +1094,13 @@ index 0000000000000000000000000000000000000000..108090675aa0eac550405fe9201e8e51
 +    return (
 +      "AIDLC bash permission allows one direct invocation of a framework tool only. " +
 +      "Do not use chaining, redirection, expansion, or command substitution."
++    );
++  }
++  const foreign = FOREIGN_AIDLC_BUN.exec(trimmed);
++  if (foreign && foreign[1] !== UNPROJECTED_ENGINE_DIR) {
++    return (
++      `This session runs the Coding Harness distribution: run framework commands from ${UNPROJECTED_ENGINE_DIR}/tools/, ` +
++      `not from ${foreign[1]}/, which belongs to another tool's copy of AI-DLC.`
 +    );
 +  }
 +  if (!AIDLC_BUN_PREFIX.test(trimmed)) return null;
@@ -1284,6 +1361,11 @@ index 0000000000000000000000000000000000000000..108090675aa0eac550405fe9201e8e51
 +
 +  pi.on("session_start", async (event, ctx) => {
 +    if (!isMain(ctx)) return;
++    // The conductor's own `aidlc …` commands resolve this distribution's tree even
++    // when another tool's copy shares the project; the harness hands variables
++    // set by a session_start handler to every command it spawns.
++    process.env.AIDLC_HARNESS_DIR = UNPROJECTED_ENGINE_DIR;
++    process.env.AIDLC_HARNESS_NAME = "harness";
 +    if (WELCOME_MESSAGE && ctx.hasUI && ctx.ui?.notify) ctx.ui.notify(WELCOME_MESSAGE, "info");
 +    const result = await runCore("session-start", { ...base(ctx, "SessionStart"), source: event.reason === "resume" ? "resume" : "startup" }, ctx.cwd);
 +    const parsed = parseJson(result.stdout);
@@ -1355,6 +1437,11 @@ index 0000000000000000000000000000000000000000..108090675aa0eac550405fe9201e8e51
 +        }
 +      }
 +      return rewritten ? { input: withTaskAssignments(input, assignments) } : undefined;
++    }
++
++    if (toolName === "ask") {
++      const neutral = withoutRecommended(input);
++      return neutral ? { input: neutral } : undefined;
 +    }
 +
 +    if (EXEC_TOOLS.has(toolName)) {
@@ -1453,7 +1540,8 @@ index 0000000000000000000000000000000000000000..108090675aa0eac550405fe9201e8e51
 +        // An answer the ask timeout picked is not a human decision: no presence, and the gate stays open.
 +        additionalContext = ASK_TIMEOUT_CONTEXT;
 +      } else {
-+        await runCore("record-human-turn", { ...base(ctx, "PostToolUse"), tool_name: "AskUserQuestion" }, cwd);
++        const payload = { ...base(ctx, "PostToolUse"), tool_name: "AskUserQuestion", ...askHookFields(input, event.details) };
++        await runCore("record-human-turn", payload, cwd);
 +      }
 +    } else if (toolName === "task") {
 +      for (const item of taskItems(input)) {
@@ -1642,7 +1730,7 @@ index 0000000000000000000000000000000000000000..a54044495fd44da1bf701a69131daace
 +export default manifest;
 diff --git a/harness/harness/onboarding.fills.ts b/harness/harness/onboarding.fills.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..7d4ef2ebf265130fb8ee8d01967d0839fd485586
+index 0000000000000000000000000000000000000000..7a445dc83dea9fddd6f27ac8f7ac061325e44abb
 --- /dev/null
 +++ b/harness/harness/onboarding.fills.ts
 @@ -0,0 +1,42 @@
@@ -1661,7 +1749,7 @@ index 0000000000000000000000000000000000000000..7d4ef2ebf265130fb8ee8d01967d0839
 +This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development, running on **Coding Harness**. The engine ships in \`.harness-aidlc/\` and a one-line bootstrap in \`.harness/extensions/aidlc.ts\` loads it (no setup command); describe what you want to build and it sets up the workflow for you. Run \`/aidlc\` followed by a scope or project description to begin. Run \`/aidlc --doctor\` to validate your setup, \`/aidlc --version\` to print the framework version, \`/aidlc --stage <slug>\` to jump to a specific stage, \`/aidlc --phase <name>\` to jump to a phase, \`/aidlc --depth <level>\` to override depth, \`/aidlc --test-strategy <level>\` to override test volume, \`/aidlc --review <class>\` to cap stage reviews (adversarial, advisory, none). Run \`/aidlc compose "<task>"\` to get a plan tailored to one task.`,
 +
 +    prereq_bullets: `- **Coding Harness ≥ 1.1.0**: the adapter relies on the \`resources_discover\` extension seam (skills, prompts, agents, rules and advisor guidance contributed from \`.harness-aidlc/\`). Check with \`harness --version\`.
-+- **aidlc on PATH**: hooks run through the installed \`aidlc\` dispatcher (\`aidlc --version\`). Set \`AIDLC_BIN\` to use another binary.
++- **bun**: Required for the CLI tools and hook scripts (tracking progress, writing the decision log, deciding what runs next), which run as \`bun .harness-aidlc/tools/aidlc.ts\`. Install via \`curl -fsSL https://bun.sh/install | bash\` and keep \`bun\` on the PATH Coding Harness inherits.
 +- **Model access**: Coding Harness owns provider credentials and model selection. Persona agents carry \`model\` and \`thinkingLevel\` frontmatter that \`aidlc config models\` maintains; the harness resolves them against your authenticated providers.
 +- **Project root**: start \`harness\` from the project root so the bootstrap in \`.harness/extensions/\` loads. Keep \`.harness/extensions/aidlc.ts\` and \`.harness-aidlc/\` committed; harness discovery skips gitignored paths.`,
 +
@@ -1675,9 +1763,9 @@ index 0000000000000000000000000000000000000000..7d4ef2ebf265130fb8ee8d01967d0839
 +
 +This is the same AI-DLC core that ships to every harness: the same ordered steps, the same approval gates, and the same written record of what was decided, rendered onto Coding Harness. On Coding Harness:
 +
-+- Approval gates and questions render through the **\`ask\` tool** (structured options; the UI adds "Other").
++- Approval gates and questions render through the **\`ask\` tool** (structured options; the UI adds "Other"). No question opens with an option pre-selected.
 +- Hooks ride the **AI-DLC adapter extension** (\`.harness-aidlc/host/adapter.ts\`, loaded by \`.harness/extensions/aidlc.ts\`): stage-rule delivery, plan-approval, review-freeze, reviewer read-scope and state-transition guards run before tools; audit and sensors run after writes and edits; the forwarding loop (Stop) blocks and continues natively; session start, session end and pre-compaction validation fire like on Claude Code.
-+- **Sensor results reach the model**: after a write, failing sensor findings are added to the tool result so the agent can fix them in the same turn. Set \`AIDLC_HARNESS_SENSOR_FEEDBACK=0\` to turn this off; the audit trail is identical either way.
++- **Sensor results reach the model**: after a write, failing sensor findings arrive as context right after the tool result, so the agent can fix them in the same turn. Set \`AIDLC_HARNESS_SENSOR_FEEDBACK=0\` to turn this off; the audit trail is identical either way.
 +- The AI-DLC method (\`aidlc/spaces/<space>/memory/*.md\`) reaches the system prompt through the adapter, from \`.harness-aidlc/host/includes.json\`; \`/aidlc space <name>\` re-points that file.
 +- The **status line** shows the AI-DLC position (\`aidlc\` segment); use \`/aidlc --status\` for detail.
 +- A workflow's \`aidlc/\` workspace tree is harness-neutral: a project can carry the Claude Code and Coding Harness distributions side by side.
@@ -1690,7 +1778,7 @@ index 0000000000000000000000000000000000000000..7d4ef2ebf265130fb8ee8d01967d0839
 +export default fills;
 diff --git a/harness/harness/skills/aidlc/SKILL.md b/harness/harness/skills/aidlc/SKILL.md
 new file mode 100644
-index 0000000000000000000000000000000000000000..b70a83117ba112cdab8d9c66ad3061ea7935fab4
+index 0000000000000000000000000000000000000000..0e274f7771588460ea5ef34fc230c73c45c0423c
 --- /dev/null
 +++ b/harness/harness/skills/aidlc/SKILL.md
 @@ -0,0 +1,324 @@
@@ -1903,7 +1991,7 @@ index 0000000000000000000000000000000000000000..b70a83117ba112cdab8d9c66ad3061ea
 +
 +- **Default to CONTINUATION.** Most prompts continue the active intent — a follow-up, a correction, an answer to a gate. Treat the input as new-work ONLY when it clearly names a distinct feature/bug/unit unrelated to the active intent's subject. Compare against the active intent: `{{INVOKE}} engine intent list --json` gives its `slug` (the subject) and `status`. Treat it as a PLAN-RESHAPE ONLY on a clear signal: the human names skipping, dropping, adding, or removing STAGES of the running workflow ("can we skip market research?"), or asks to lighten or re-fit the remaining plan. False-positive offers are the main risk — when in doubt, continue. This is the same recognise-vs-route discipline as "The Forwarding Loop": you do not improvise routing, but recognising a topic change before you run a Branch-10 stage IS your job.
 +- **On genuine new-work, OFFER - never auto-create.** Surface an `ask` showing the active intent and the proposed new one, including the **scope** you would give the new intent (infer it from the new-work description the way the engine resolves a fresh `/aidlc` - keyword/precedence - and name it so the human can correct it). Phrase it as a Yes/No confirmation and **lead the affirmative option with the word "Yes"** (e.g. "Yes - start a second intent"), with a decline option alongside. Starting a workflow is a mutation gated on a human yes (judgement→human) - never create without an explicit confirmation.
-+- **On CONFIRM:** re-run `next` with `--new-intent` and the confirmed scope + new-work text: `{{INVOKE}} engine orchestrate next --new-intent --scope <the confirmed scope> "<the new-work description>"`. The engine returns a `print` directive naming the `intent-create` command, including the `--label "<2-3 word kebab essence>"` placeholder. Replace `--label` with a short 2-3 word essence of the description and run the command. Then **STOP and hand off to a fresh session** rather than re-running `next`: tell the user to `/clear` (or restart Claude Code), then invoke `/aidlc` to begin the new intent with a clean slate. The full description and intent are already saved on disk. The offer itself is conductor prose, not a new directive kind.
++- **On CONFIRM:** re-run `next` with `--new-intent` and the confirmed scope + new-work text: `{{INVOKE}} engine orchestrate next --new-intent --scope <the confirmed scope> "<the new-work description>"`. The engine returns a `print` directive naming the `intent-create` command, including the `--label "<2-3 word kebab essence>"` placeholder. Replace `--label` with a short 2-3 word essence of the description and run the command. Then **STOP and hand off to a fresh session** rather than re-running `next`: tell the user to start a new session with `/new`, then invoke `/aidlc` to begin the new intent with a clean slate. The full description and intent are already saved on disk. The offer itself is conductor prose, not a new directive kind.
 +- **On DECLINE:** proceed with the active intent — the normal Branch-10 `run-stage`.
 +- **On a PLAN-RESHAPE signal, route through the compose verb - never forward the raw text.** A mid-flow freeform `next` with no verb advances the current stage, so a reshape request forwarded verbatim would silently run a stage instead of re-shaping the plan. Your first engine call becomes `{{INVOKE}} engine orchestrate next compose "<their words>"`, and the engine's with-state compose dispatch owns the flow from there - UNLESS the request names specific stages imperatively, in which case the fast path (see "Composing a workflow plan" below) skips the `next compose` call entirely and goes straight to marker, gate, verb. This does not weaken the verbatim rule: it is the same sanctioned pre-forward judgment step as the new-work offer, and everything after the judgment rides the deterministic verb. Never do this under autonomous Construction - an unattended run has no human to answer the gate.
 +- You switch between intents any time with `/aidlc intent <name>` (bare `/aidlc intent` lists them) — parallel to `/aidlc space <name>`. Work you are done with but never finished is retired with `/aidlc intent archive <name>` (a `print` directive names the utility command; the record and its audit trail stay on disk, the default listing hides it, and `/aidlc intent unarchive <name>` brings it back). Archiving is a human decision: never run it to "make room" for new work, and never run it without the human asking for it.
@@ -2020,10 +2108,10 @@ index 0000000000000000000000000000000000000000..b70a83117ba112cdab8d9c66ad3061ea
 +- **No nested delegation**: The conductor orchestrates all agent invocations. Agents do NOT invoke each other or spawn subagents.
 diff --git a/harness/harness/skills/aidlc/question-rendering.md b/harness/harness/skills/aidlc/question-rendering.md
 new file mode 100644
-index 0000000000000000000000000000000000000000..d8b7a4c41804b41897fd69d6e9c9219aeba245e9
+index 0000000000000000000000000000000000000000..ff565e7d7410850b7e56e52d630926e3539e6ca5
 --- /dev/null
 +++ b/harness/harness/skills/aidlc/question-rendering.md
-@@ -0,0 +1,168 @@
+@@ -0,0 +1,169 @@
 +# Question Rendering — Coding Harness annex
 +
 +This file defines how THIS harness renders the structured questions that
@@ -2119,7 +2207,8 @@ index 0000000000000000000000000000000000000000..d8b7a4c41804b41897fd69d6e9c9219a
 +auto-selects that option, or the first option when none is marked, after the
 +timeout. **Never set `recommended` on an approval gate, Plan Approval, the
 +consolidated-summary checkpoint, or any question whose answer the stage
-+protocol records as a human decision.** If a tool result shows
++protocol records as a human decision.** The AI-DLC adapter removes
++`recommended` from every `ask` call regardless. If a tool result shows
 +`(auto-selected after timeout)`, the human did not answer: do not record or
 +report it, re-present the same question, and END THE TURN. The AI-DLC adapter
 +adds the same reminder to that tool result.
@@ -2396,10 +2485,10 @@ index a61bce428d7e97dfec030e72d50e6011bd1f32ad..4bcd887f918e051ede2f1894f18cc3b5
    "kiro-ide": "dist/kiro-ide/.kiro/tools/data/harness.json",
    opencode: "dist/opencode/.aidlc/tools/data/harness.json",
 diff --git a/tests/unit/t304-round18-acceptance-fixes.test.ts b/tests/unit/t304-round18-acceptance-fixes.test.ts
-index f327bbe375c18ec82c71f4536f85c3de943cddfb..a85e8e173cbf6ac1ec7269031ff8bd28cd5b5760 100644
+index 46d809eb1cd11ec20955eab5466211efc2506c8a..8dcb651aa92f28622dcde284198bb872cdbf3530 100644
 --- a/tests/unit/t304-round18-acceptance-fixes.test.ts
 +++ b/tests/unit/t304-round18-acceptance-fixes.test.ts
-@@ -511,7 +511,7 @@ describe("t304 first-run prompt and detection safety", () => {
+@@ -512,7 +512,7 @@ describe("t304 first-run prompt and detection safety", () => {
    }, 120_000);
  
    test("Kiro recommended defaults record no provider answer", () => {
@@ -2408,7 +2497,7 @@ index f327bbe375c18ec82c71f4536f85c3de943cddfb..a85e8e173cbf6ac1ec7269031ff8bd28
      expect(result.status, result.stdout + result.stderr).toBe(0);
      expect(result.stdout).toContain(
        "no provider settings; model access comes with Kiro CLI",
-@@ -528,8 +528,8 @@ describe("t304 first-run prompt and detection safety", () => {
+@@ -529,8 +529,8 @@ describe("t304 first-run prompt and detection safety", () => {
    // access it never needed.
    test("changing the harness at the summary re-derives the provider answer", () => {
      // Claude Code first (1), customize (2), accept every step, then edit step 1
@@ -2419,7 +2508,7 @@ index f327bbe375c18ec82c71f4536f85c3de943cddfb..a85e8e173cbf6ac1ec7269031ff8bd28
      expect(toKiro.status, toKiro.stdout + toKiro.stderr).toBe(0);
      expect(toKiro.stdout).toContain("2. Provider     keep current");
      expect(toKiro.stdout).toContain(
-@@ -541,9 +541,9 @@ describe("t304 first-run prompt and detection safety", () => {
+@@ -542,9 +542,9 @@ describe("t304 first-run prompt and detection safety", () => {
      );
      expect(kiro.providers).toBeUndefined();
  
