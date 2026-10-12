@@ -7,9 +7,9 @@ The running record of the end-to-end build: what passed at each gate, what devia
 |---|---|---|---|
 | G0 | Spec v2, improvements fixes, graft guide, mirror | done | aidlc-harness `8aef34a`; mirror pushed |
 | P0 | Source build reproduces installed 2.10.0; build/install scripts | done | full build green (54/54 binary gates); sandbox install; `config --harness harness` + doctor 0 problems; patches reproduce the fork tree |
-| P1 | Harness H1–H3, version 1.1.0 | pending | — |
-| P2 | Core registration, packager, init/doctor, plugins, release scripts | in progress | C01–C08 committed; C09 and the site-decision gate pending |
-| P3 | Hook contracts, adapter, deterministic tests, live S1–S14 | pending | — |
+| P1 | Harness H1–H3, version 1.1.0 | done | coding-harness `f6cd9e7` pushed; no test regressions (below); 1.1.0 binary built to a separate path |
+| P2 | Core registration, packager, init/doctor, plugins, release scripts | done | C01–C09; fork suite equals the baseline; site gate 342 sites / 25 files |
+| P3 | Hook contracts, adapter, deterministic tests, live S1–S14 | in progress | C10 deterministic tests green; live S1, S2, S6, S7, S10, S11 green |
 | P4 | Live parity with Claude Code, coexistence | pending | — |
 | P6 | Improvements A1–A4, B1, B3, B4, B2 | pending | — |
 | P5 | Version 1.0.0, real install, dogfood | pending | — |
@@ -31,6 +31,10 @@ The running record of the end-to-end build: what passed at each gate, what devia
 - **Sandbox install.** `bun scripts/install.ts --sandbox out/sandbox/p0 --from out/release-p0` installs and activates the build in an isolated root and disables the update check (`aidlc system config global set update-check false`, stored in `<installRoot>/aidlc.settings.json`). `aidlc config --project-dir <p> --harness harness --mcp none --quiet` projects `.harness/extensions/aidlc.ts`, `.harness-aidlc/`, `aidlc/`, `AGENTS.md` and `.gitignore`; `aidlc doctor --verbose` reports 0 problems, every harness wiring row ok. Its plugin warning (`host:inventory-unavailable`) is identical on an OpenCode project.
 - **Local builds are unsigned.** Official releases carry a provenance bundle signed by the upstream release workflow; a local build cannot. The build writes an explicit `{"localBuild":true,"attested":false}` marker in that slot and the install runs with attestation off (`AIDLC_GH_BIN=/usr/bin/false`); the release's SHA-256 checksums still verify every asset.
 - **Patch series reproduces the fork.** `git am -3 patches/*.patch` on a fresh `v2.10.0` clone yields a tree identical to `harness-distribution` HEAD.
+- **Harness 1.1.0 has no regressions.** Coding-agent tests that fail with H1–H3 were each re-run with and without the change (`git stash`): the singleton bucket (3 failures) and the 40 other failing files (98 failures) fail identically either way, and `packages/tui` has the same 16 failures before and after. These are pre-existing on this machine. H1–H3's own tests (`sdk-resources-discover`, `discovery/at-imports`, `discovery/claude-tools`) pass, and `check:types` is clean for coding-agent and tui.
+- **Fork suite equals the baseline.** `bun tests/run-tests.ts --smoke --unit --no-llm` on the fork: 367 files; the only failures are the four baseline ones above that still fail (`t-tui-tmux-compat`, `t243`, `t293`, `t296`). Every upstream test that enumerates distributions now covers `harness` (test matrix entry, root files, method include, reviewer-scope registration, onboarding, documentation roster, release inventory, plugin build).
+- **C10 deterministic coverage.** `t-harness-emit` (persona projection, include list, entrypoint boundary, skill drift guard), `t-harness-adapter-map` (event-to-hook mapping through the adapter's `runCore` seam), `t-harness-hook-contracts` (the shipped adapter driving the real hooks through the production dispatcher), `t-harness-usage-reader` (harness session usage, attribution, incremental fold).
+- **Live journeys on Coding Harness 1.1.0** (`AIDLC_HARNESS_RPC_LIVE=1`, RPC mode, `anthropic/claude-sonnet-5-5`, scripted `ask` answers): S1/S10/S11 — `/aidlc bugfix …` composes a plan, passes the plan gate, creates the intent, runs the first stage with subagents and asks inside the workflow; the audit records `WORKFLOW_STARTED`, `STAGE_STARTED`, `HUMAN_TURN`, `SESSION_ENDED`, and the usage ledger attributes subagent spend by agent type. S2 — a write before plan approval is refused with the guard's reason. S6 — a traceability write fires its sensor and the verdict reaches the model. S7 — `engine state approve` through bash is refused. 4/4 pass in 192 s.
 
 ## Deviations from SPEC v1
 - **Source-based fork.** v1 patched installed runtime trees. v2 forks the upstream source, because it is public (MIT-0), reproduces the install exactly, and grafts with `git am`.
@@ -39,6 +43,9 @@ The running record of the end-to-end build: what passed at each gate, what devia
 - **A4 changes design.** No per-request history rewriting (prompt cache); compaction at stage boundaries instead.
 - **No tier pins a model on the harness.** SPEC v2 §4 C03 mapped tiers to `@slow`/`@default`/`@smol`. Model access is harness-owned, so every tier projects `model: null` and the agent inherits the session model; `balanced` projects `thinkingLevel: medium`. Cross-vendor routing comes from A1 at spawn time instead.
 - **Harness plugins compose like OpenCode's.** The harness has no plugin store that runs a plugin's SessionStart hook, so plugins use the current-root inventory: `PLUGIN_ROOT=<built plugin> aidlc plugin sync`. Persona twins land in `.harness-aidlc/host/agents`.
+- **The orchestrator skill is checked in.** SPEC v2 derived `SKILL.md` at emit time. Upstream tests read every distribution's authored skill, so the derivation is now checked in as `harness/harness/skills/aidlc/SKILL.md`; the build fails when it drifts from the Claude skill (`bun harness/harness/emit.ts --write-skill` regenerates it).
+- **Code-execution tools are guarded.** Live runs showed the conductor driving the engine from `eval` (a Python subprocess), which no Bash-parsing guard sees. The adapter refuses `eval`, `debug`, `ssh`, `recipe` and `vibe_spawn`/`vibe_send` input that invokes the engine, and routes the rest through `plan-approval-guard` as opaque tools.
+- **Sensor feedback is a context message.** The harness delivers `tool_result` `additionalContext` as a context message after the tool batch, not inside the tool result.
 
 ## Decisions
 | Date | Decision |

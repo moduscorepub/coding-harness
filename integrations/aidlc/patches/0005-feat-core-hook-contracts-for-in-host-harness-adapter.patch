@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
 Date: Sun, 11 Oct 2026 23:40:17 +0100
-Subject: [PATCH 5/8] feat(core): hook contracts for in-host harness adapter
+Subject: [PATCH 05/10] feat(core): hook contracts for in-host harness adapter
 
 - run-sensors: AIDLC_SENSOR_FEEDBACK=1 prints the dispatcher's verdicts as
   one {"sensor_feedback":[...]} stdout line so an in-host adapter can show
@@ -23,8 +23,8 @@ Subject: [PATCH 5/8] feat(core): hook contracts for in-host harness adapter
  core/tools/aidlc-includes.ts          |  35 +++++
  core/tools/aidlc-learnings.ts         |   3 +-
  core/tools/aidlc-runner-gen.ts        |   2 +
- core/tools/aidlc-usage.ts             | 190 ++++++++++++++++++++++++--
- 6 files changed, 302 insertions(+), 17 deletions(-)
+ core/tools/aidlc-usage.ts             | 192 ++++++++++++++++++++++++--
+ 6 files changed, 304 insertions(+), 17 deletions(-)
 
 diff --git a/core/hooks/aidlc-continue-workflow.ts b/core/hooks/aidlc-continue-workflow.ts
 index ac1821c947884d28c4489a2b7840a9c87c83dbe1..fb32cda101f9792ea3660f8d616597395016acb0 100644
@@ -277,7 +277,7 @@ index dc65f78b1bd8182cf1d11ce39cd1d065f4769487..12a0344544524db237e208721e3197c3
        return "start a new Kiro CLI session or open a new Kiro IDE chat";
      }
 diff --git a/core/tools/aidlc-usage.ts b/core/tools/aidlc-usage.ts
-index 74022ffa8ac0a0a45ba5db29731d2aded7e610d2..2e9454aff46419efd86dcb93b1cdadbe024695bf 100644
+index 74022ffa8ac0a0a45ba5db29731d2aded7e610d2..df4ca2e9ead761e5c1a85210fe4492332ed733ca 100644
 --- a/core/tools/aidlc-usage.ts
 +++ b/core/tools/aidlc-usage.ts
 @@ -365,13 +365,19 @@ function parseTranscriptLine(
@@ -338,7 +338,7 @@ index 74022ffa8ac0a0a45ba5db29731d2aded7e610d2..2e9454aff46419efd86dcb93b1cdadbe
  // covers: function:dedupeByMessageId
  // Collapse the split-line overcount (the CRITICAL bug): Claude Code writes one
  // llm call (one `message.id`) as MULTIPLE contiguous JSONL lines - one per
-@@ -548,12 +577,132 @@ export function readClaudeSession(mainPath: string): UsageRow[] {
+@@ -548,12 +577,134 @@ export function readClaudeSession(mainPath: string): UsageRow[] {
    return attributeAgents(rows, metaByAgentId);
  }
  
@@ -350,9 +350,11 @@ index 74022ffa8ac0a0a45ba5db29731d2aded7e610d2..2e9454aff46419efd86dcb93b1cdadbe
 +// ---------------------------------------------------------------------------
 +// Coding Harness sessions: `<sessions>/<cwd>/<ts>_<id>.jsonl` opens with a
 +// `{"type":"title"}` line and a `{"type":"session","version":N,"cwd":…}`
-+// header. Subagent and advisor transcripts live beside it in
-+// `<ts>_<id>/<agent id>.jsonl` (`__advisor*.jsonl` for advisors), nested one
-+// directory deeper for each further delegation level.
++// header. Its artifacts directory `<ts>_<id>/` holds one transcript per task
++// subagent, named by the task's `name` (`Review.jsonl`, `Review-2.jsonl` on a
++// repeat), and the advisors' `__advisor.jsonl` / `__advisor.<slug>.jsonl`. A
++// subagent's own artifacts directory (`<ts>_<id>/Review/`) holds its children,
++// whose ids carry the parent prefix (`Review.Probe.jsonl`), and its advisors.
 +// ---------------------------------------------------------------------------
 +
 +/** True when `path` is a Coding Harness session transcript. Reads only the first lines. */
@@ -403,9 +405,9 @@ index 74022ffa8ac0a0a45ba5db29731d2aded7e610d2..2e9454aff46419efd86dcb93b1cdadbe
 +}
 +
 +/**
-+ * Agent type per subagent id. Advisors are `advisor`; task subagents take the
-+ * agent their parent's `task` call named, matched on the task name the harness
-+ * puts after the spawn index (`0-Explore` → `Explore`).
++ * Agent type per subagent id. Advisor transcripts are `advisor`; a task
++ * subagent takes the agent its parent's `task` call named, matched on the task
++ * name: the last dotted segment of its id, without a `-<n>` repeat suffix.
 + */
 +export function harnessAgentTypes(mainPath: string, files: HarnessSubagentFile[]): Record<string, string> {
 +  const agentByTaskName: Record<string, string> = {};
@@ -444,13 +446,13 @@ index 74022ffa8ac0a0a45ba5db29731d2aded7e610d2..2e9454aff46419efd86dcb93b1cdadbe
 +  for (const file of files) collect(file.path);
 +  const types: Record<string, string> = {};
 +  for (const file of files) {
-+    const leaf = file.agentId.split("/").pop() ?? file.agentId;
-+    if (leaf.startsWith("__advisor")) {
++    const segments = (file.agentId.split("/").pop() ?? file.agentId).split(".");
++    if (segments.includes("__advisor")) {
 +      types[file.agentId] = "advisor";
 +      continue;
 +    }
-+    const taskName = leaf.replace(/^\d+-/, "");
-+    const agent = agentByTaskName[taskName] ?? agentByTaskName[leaf];
++    const taskName = segments[segments.length - 1] ?? "";
++    const agent = agentByTaskName[taskName] ?? agentByTaskName[taskName.replace(/-\d+$/, "")];
 +    if (agent) types[file.agentId] = agent;
 +  }
 +  return types;
@@ -476,7 +478,7 @@ index 74022ffa8ac0a0a45ba5db29731d2aded7e610d2..2e9454aff46419efd86dcb93b1cdadbe
    let raw: string;
    try {
      raw = readFileSync(path, "utf-8");
-@@ -1692,6 +1841,29 @@ export function foldTranscriptIntoLedger(
+@@ -1692,6 +1843,29 @@ export function foldTranscriptIntoLedger(
          mode !== "holdback",
        );
  

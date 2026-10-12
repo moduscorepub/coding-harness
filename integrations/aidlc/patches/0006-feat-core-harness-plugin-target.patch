@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
 Date: Sun, 11 Oct 2026 23:44:16 +0100
-Subject: [PATCH 6/8] feat(core): harness plugin target
+Subject: [PATCH 06/10] feat(core): harness plugin target
 
 Plugin inventory, manifest directory and harness resolution know the
 Coding Harness distribution. Plugin composition emits each persona's task

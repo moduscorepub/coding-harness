@@ -1,16 +1,17 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
 Date: Sun, 11 Oct 2026 23:54:58 +0100
-Subject: [PATCH 8/8] feat(release): harness in release verification and binary
- gates
+Subject: [PATCH 08/10] feat(release): harness in release verification and
+ binary gates
 
 verify-release expects the harness runtime tree; the compiled binary's
 smoke run resolves harness sensors and runners and probes a harness-only
 install through the doctor's bootstrap check.
 ---
- scripts/build-binaries.ts | 6 ++++++
- scripts/verify-release.ts | 1 +
- 2 files changed, 7 insertions(+)
+ scripts/build-binaries.ts                  | 6 ++++++
+ scripts/verify-release.ts                  | 1 +
+ tests/unit/t244-install-management.test.ts | 1 +
+ 3 files changed, 8 insertions(+)
 
 diff --git a/scripts/build-binaries.ts b/scripts/build-binaries.ts
 index 5cd023a0a3b0964a4ca54661cc266b8a2c7f1ecf..4a009ed8b9f5114b2b9bf54e4e414d01c466d4ca 100644
@@ -41,6 +42,18 @@ index cfeff96d3f5a16f519fdd16014e1328526ea8d0f..d95e42028295d0413a854d5e4ab0ed63
 --- a/scripts/verify-release.ts
 +++ b/scripts/verify-release.ts
 @@ -21,6 +21,7 @@ const RELEASE_DISTRIBUTIONS = [
+   "codex",
+   "copilot",
+   "cursor",
++  "harness",
+   "kiro",
+   "kiro-ide",
+   "opencode",
+diff --git a/tests/unit/t244-install-management.test.ts b/tests/unit/t244-install-management.test.ts
+index 09db7acbb4dbbdcecec939df3ef5134cdc96c112..54729aee5ba5760783389bda1914b470a84f63fd 100644
+--- a/tests/unit/t244-install-management.test.ts
++++ b/tests/unit/t244-install-management.test.ts
+@@ -79,6 +79,7 @@ const RELEASE_HARNESSES = [
    "codex",
    "copilot",
    "cursor",

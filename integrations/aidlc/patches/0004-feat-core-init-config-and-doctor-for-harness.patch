@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
 Date: Sun, 11 Oct 2026 23:34:44 +0100
-Subject: [PATCH 4/8] feat(core): init, config and doctor for harness
+Subject: [PATCH 04/10] feat(core): init, config and doctor for harness
 
 `aidlc init --harness harness` and model-policy commands accept the
 harness distribution; first-run guidance names Coding Harness. Config

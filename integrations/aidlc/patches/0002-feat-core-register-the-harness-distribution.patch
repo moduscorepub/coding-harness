@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
 Date: Sun, 11 Oct 2026 23:27:07 +0100
-Subject: [PATCH 2/8] feat(core): register the harness distribution
+Subject: [PATCH 02/10] feat(core): register the harness distribution
 
 Coding Harness ships its engine in .harness-aidlc (the user's .harness/
 holds harness configuration). Teach runtime discovery, hook path
@@ -17,7 +17,8 @@ scan/doc exclusions about that directory and the harness distribution name.
  core/tools/aidlc-state.ts         |  2 ++
  core/tools/aidlc-utility.ts       |  4 +++-
  core/tools/aidlc.ts               |  1 +
- 9 files changed, 22 insertions(+), 6 deletions(-)
+ tests/.coverage-registry.json     | 11 +++++++++--
+ 10 files changed, 31 insertions(+), 8 deletions(-)
 
 diff --git a/core/hooks/aidlc-statusline.ts b/core/hooks/aidlc-statusline.ts
 index c583df870081b8f28d2c7bde0ab629f5f764223a..7955e76e1a7c96c892bfe499dc4c9e1a027833ad 100644
@@ -191,3 +192,33 @@ index fd142751dfda99439f6e921850f88ca9f869f4a9..ae0bf5fa53c3e6c3d697cf855e837901
        ].filter((value, index, values): value is string =>
          typeof value === "string" && value.length > 0 && values.indexOf(value) === index
        );
+diff --git a/tests/.coverage-registry.json b/tests/.coverage-registry.json
+index f8266f7447e88c48d99589ff258e87a3c52e1420..e1fcd006c321314d04ada80d526be356fc96270a 100644
+--- a/tests/.coverage-registry.json
++++ b/tests/.coverage-registry.json
+@@ -20,9 +20,9 @@
+     "render-surface": "tui"
+   },
+   "counts": {
+-    "total": 1132,
++    "total": 1133,
+     "enumeratedByClass": {
+-      "function": 808,
++      "function": 809,
+       "audit": 105,
+       "scope": 11,
+       "stage": 33,
+@@ -3926,6 +3926,13 @@
+       "coveredBy": [],
+       "status": "UNCOVERED"
+     },
++    {
++      "unitClass": "function",
++      "unitId": "function:HOOK_EXECUTION_RECOVERY_HARNESS",
++      "minMechanism": "none",
++      "coveredBy": [],
++      "status": "UNCOVERED"
++    },
+     {
+       "unitClass": "function",
+       "unitId": "function:HOOK_EXECUTION_RECOVERY_OTHER",
