@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
 Date: Mon, 12 Oct 2026 05:16:02 +0100
-Subject: [PATCH 11/17] feat(harness): cross-vendor review routing (A1)
+Subject: [PATCH 11/18] feat(harness): cross-vendor review routing (A1)
 
 ---
  core/tools/aidlc-settings.ts                |  57 +++++++++++

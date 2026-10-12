@@ -5,7 +5,8 @@
 // Usage:
 //   bun scripts/install.ts --sandbox <dir>   install root <dir>/root, launcher in <dir>/bin
 //   bun scripts/install.ts --real            default install root and bin dir
-//   bun scripts/install.ts --rollback        make the recorded previous version active again
+//   bun scripts/install.ts --rollback        make the version active before the last real install active again
+//   bun scripts/install.ts --sandbox <dir> --rollback   the same inside a sandbox
 //   --from <dir>                             release assets to install (default out/release)
 //
 // Every install sets the machine `update-check` to false: the fork's version can
@@ -21,7 +22,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 const ROOT = join(import.meta.dir, "..");
-const STATE = join(ROOT, "out", "install-state.json");
+const REAL_STATE = join(ROOT, "out", "install-state.json");
 
 type InstallState = { previousVersion: string | null; installedVersion: string; binDir: string; installRoot: string };
 
@@ -46,7 +47,7 @@ function activeVersion(aidlc: string, env: Record<string, string>): string | nul
 	return /aidlc (\S+)/.exec(result.stdout)?.[1] ?? null;
 }
 
-function install(installRoot: string, binDir: string, sandbox: boolean): void {
+function install(installRoot: string, binDir: string, statePath: string): void {
 	if (!existsSync(join(RELEASE, "version.json"))) throw new Error(`${RELEASE} has no version.json; run bun scripts/build.ts`);
 	const version = (JSON.parse(readFileSync(join(RELEASE, "version.json"), "utf-8")) as { version: string }).version;
 	const env = { AIDLC_INSTALL_ROOT: installRoot, AIDLC_BIN_DIR: binDir, AIDLC_GH_BIN: "/usr/bin/false" };
@@ -57,17 +58,15 @@ function install(installRoot: string, binDir: string, sandbox: boolean): void {
 	run(aidlc, ["system", "config", "global", "set", "update-check", "false"], env, "disable update check");
 	const reported = activeVersion(aidlc, env);
 	if (reported !== version) throw new Error(`installed launcher reports ${reported}, expected ${version}`);
-	if (!sandbox) {
-		const state: InstallState = { previousVersion, installedVersion: version, binDir, installRoot };
-		mkdirSync(join(ROOT, "out"), { recursive: true });
-		writeFileSync(STATE, `${JSON.stringify(state, null, 2)}\n`);
-	}
+	const state: InstallState = { previousVersion, installedVersion: version, binDir, installRoot };
+	mkdirSync(join(statePath, ".."), { recursive: true });
+	writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
 	console.log(`install: aidlc ${version} active in ${installRoot} (previous: ${previousVersion ?? "none"})`);
 }
 
-function rollback(): void {
-	if (!existsSync(STATE)) throw new Error("no recorded real install to roll back");
-	const state = JSON.parse(readFileSync(STATE, "utf-8")) as InstallState;
+function rollback(statePath: string): void {
+	if (!existsSync(statePath)) throw new Error(`no recorded install to roll back (${statePath})`);
+	const state = JSON.parse(readFileSync(statePath, "utf-8")) as InstallState;
 	if (!state.previousVersion) throw new Error("the recorded install had no previous version");
 	const env = { AIDLC_INSTALL_ROOT: state.installRoot, AIDLC_BIN_DIR: state.binDir };
 	const aidlc = join(state.binDir, "aidlc");
@@ -79,16 +78,19 @@ function rollback(): void {
 
 try {
 	const sandbox = flag("--sandbox");
+	const rollingBack = process.argv.includes("--rollback");
 	if (sandbox) {
 		const dir = resolve(sandbox);
-		install(join(dir, "root"), join(dir, "bin"), true);
+		const statePath = join(dir, "install-state.json");
+		if (rollingBack) rollback(statePath);
+		else install(join(dir, "root"), join(dir, "bin"), statePath);
 	} else if (process.argv.includes("--real")) {
 		const installRoot = process.env.AIDLC_INSTALL_ROOT ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share"), "aidlc");
-		install(installRoot, process.env.AIDLC_BIN_DIR ?? join(homedir(), ".local", "bin"), false);
-	} else if (process.argv.includes("--rollback")) {
-		rollback();
+		install(installRoot, process.env.AIDLC_BIN_DIR ?? join(homedir(), ".local", "bin"), REAL_STATE);
+	} else if (rollingBack) {
+		rollback(REAL_STATE);
 	} else {
-		console.error("usage: bun scripts/install.ts --sandbox <dir> | --real | --rollback");
+		console.error("usage: bun scripts/install.ts --sandbox <dir> [--rollback] | --real | --rollback");
 		process.exit(2);
 	}
 } catch (error) {

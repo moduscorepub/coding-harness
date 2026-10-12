@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
 Date: Mon, 12 Oct 2026 05:32:06 +0100
-Subject: [PATCH 12/17] feat(harness): continuous advisors on construction
+Subject: [PATCH 12/18] feat(harness): continuous advisors on construction
  agents (A2)
 
 ---

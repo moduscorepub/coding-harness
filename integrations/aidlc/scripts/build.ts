@@ -3,7 +3,10 @@
 // package → determinism check → native binary → release assets in out/release.
 //
 // Usage:
-//   bun scripts/build.ts [--skip-binaries] [--bun <path>] [--output <dir>]
+//   bun scripts/build.ts [--skip-binaries] [--bun <path>] [--output <dir>] [--upstream <dir>]
+//
+// --upstream builds another checkout of the fork (for example a git worktree of
+// upstream/) instead of upstream/.
 //
 // --bun selects the Bun used to compile the binary. Default: Bun 1.4.2 (the
 // toolchain of the official 2.10.0 build) through bunx, falling back to the
@@ -19,13 +22,14 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const ROOT = join(import.meta.dir, "..");
-const UPSTREAM = join(ROOT, "upstream");
 const RELEASE_BUN = "1.4.2";
 
 function flag(name: string): string | undefined {
 	const index = process.argv.indexOf(name);
 	return index >= 0 ? process.argv[index + 1] : undefined;
 }
+
+const UPSTREAM = resolve(flag("--upstream") ?? join(ROOT, "upstream"));
 
 function run(command: string, args: string[], label: string): string {
 	console.log(`build: ${label}`);

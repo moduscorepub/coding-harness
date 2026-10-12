@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
 Date: Sun, 11 Oct 2026 23:47:47 +0100
-Subject: [PATCH 07/17] feat(harness): Coding Harness distribution
+Subject: [PATCH 07/18] feat(harness): Coding Harness distribution
 
 harness/harness projects the core into .harness-aidlc and emits the host
 shell: persona task agents (host/agents), the /aidlc prompt, the method

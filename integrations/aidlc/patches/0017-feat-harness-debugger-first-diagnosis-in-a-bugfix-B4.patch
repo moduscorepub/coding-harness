@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
 Date: Mon, 12 Oct 2026 07:50:48 +0100
-Subject: [PATCH 17/17] feat(harness): debugger-first diagnosis in a bugfix
+Subject: [PATCH 17/18] feat(harness): debugger-first diagnosis in a bugfix
  (B4)
 
 ---

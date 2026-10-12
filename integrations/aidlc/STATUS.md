@@ -11,7 +11,7 @@ The running record of the end-to-end build: what passed at each gate, what devia
 | P2 | Core registration, packager, init/doctor, plugins, release scripts | done | C01–C09; fork suite equals the baseline; site gate 342 sites / 25 files |
 | P3 | Hook contracts, adapter, deterministic tests, live S1–S14 | done | C10: S3/S4/S5/S12/S13/S14 deterministic contracts; live S1–S3, S6–S12, S14 green (8 scenarios, 243 s) |
 | P4 | Live parity with Claude Code, coexistence | done | S15/T4 parity green (811 s), S16 coexistence green (258 s); harness H4; fork suite better than baseline (below) |
-| P6 | Improvements A1–A4, B1, B3, B4, B2 | in progress | A1–A4, B1, B3, B4 committed with live S9/S9b and S17–S22 green (below); B2 kit built, grader preflight clean, `/ratchet aidlc-method` running |
+| P6 | Improvements A1–A4, B1, B3, B4, B2 | done | A1–A4, B1, B3, B4 committed with live S9/S9b and S17–S22 green (below); B2 `/ratchet aidlc-method` baseline plus one gated round, reverted as within noise (below) |
 | P5 | Version 1.0.0, real install, dogfood | pending | — |
 
 ## Verified so far
@@ -61,8 +61,20 @@ The running record of the end-to-end build: what passed at each gate, what devia
   | B1 project checkers | `1a1c69723` | S20 | `/aidlc-checkers` records the fixture's lint (`generic`, `{file}`) and test (`exit-code`) commands; a write that breaks the lint fails `project-checks` and the finding reaches the model |
   | B3 prewalk | `4c4a4ddbe` | S21 | the dispatched developer plans and makes its first write on Sonnet, then continues on the `smol` model (Haiku) |
   | B4 debugger | `310c6109c` | S22 | in a Python bugfix the debugger (`xd://debug`, debugpy from the project `.venv`) runs before the first edit of the faulty file, and the diagnosis cites `subtotal = 5000`, `discount = 6000` at the breakpoint |
+  | B2 ratchet kit | `ratchet/` (this repo) | `/ratchet aidlc-method`, 1 round | baseline 15/15 cases pass at $8.40 a case; the proposed developer-agent change (narrower knowledge preflight, no debugger relaunch when the plan carries the diagnosis) also passes 15/15 but costs $9.04 against $8.59 a train case, and the gate reverts it as "no change outside noise" |
 
   B1 is a core change: `project-checks` ships to every distribution (deterministic `t-sensor-project-checks`, including a real dispatcher fire). The sensor inventory tests (`t93`, `t95`, `t227`, `t230`, `t239`) and the sensor documentation follow it.
+
+  B2 ran through `ratchet/drive.ts` (harness RPC, `/ratchet` with `--rounds 1`): seed `1812014203`, 9 train and 6 test cases, 1 rep, concurrency 4. The goal started as `pass` up with `cost_usd` held; the baseline sat at the pass ceiling, so the plan was re-approved as `cost_usd` down with `pass` held. Spend $258.96: baseline $126.00, round 1 $128.77, proposer and driver $4.19. `.harness/ratchet/aidlc-method/` holds the status table, the narrative and `v1/change.patch` (the reverted change); `upstream/` is unchanged. A baseline at the pass ceiling leaves cost as the only measurable gain, so the next useful rounds need harder cases.
+- **P5 release 1.0.0.** C12 (`f52c4d21a`, `chore(release): 1.0.0`) sets `AIDLC_VERSION`, the CHANGELOG entry and the README badge. Fork suite on it (`--smoke --unit --no-llm`): 372 files, 11,123 cases, 3 failed files. These are the known environment failures `t-tui-tmux-compat`, `t293` and `t296` (6 cases); no version pin failed. `bun scripts/build.ts --upstream <worktree> --output out/release-1.0.0` built the native `aidlc-darwin-arm64`, `aidlc-runtime-1.0.0.tar.gz` and all 8 distributions.
+- **P5 install.** Sandbox rehearsal: install 2.10.0, install 1.0.0, `--sandbox <dir> --rollback` (2.10.0 active again), `aidlc use 1.0.0`. Real install: `install.ts --real` made 1.0.0 active with 2.10.0 kept; `install.ts --rollback` restored 2.10.0; `aidlc use 1.0.0` made 1.0.0 active again. `update-check` is off; both versions stay installed.
+- **P5 dogfood on a real project.** A copy of a private multi-language monorepo with a live AI-DLC workspace (two intents, one active) and a 2.10.0 Claude Code tree. `aidlc config --harness harness` added the harness tree; its doctor reports 0 problems. Journeys ran over RPC on `anthropic/claude-sonnet-5-5`, with every question answered by its first option.
+
+  | Journey | Request | Result |
+  |---|---|---|
+  | Bugfix | An injected defect (a JSON loader accepted a repeated field when both values were equal) and a failing regression test; `/aidlc --new-intent --scope bugfix …` | `WORKFLOW_COMPLETED` in 5 prompts, 36 min, $22.56 (conductor $13.16, the cross-family advisor $3.40, reviewers, scans and developer $6.00). The fix reverts the defect and adds a regression test for the second loader; 4/4 tests pass. The developer and the conductor ran `debugpy` through `xd://debug` before the edit (B4). `project-checks` fired 4 times and reported `tool-unavailable`, as the project has no checker config (B1). The engine refused five actions (a stale code-KB snapshot, a missing plan-approval session, source changed under review twice, the review budget) and the conductor recovered from each. |
+
+  Two adoption findings, both documented in README.md and the harness docs: the fork's major version differs from the project's 2.10.0 Claude tree, so every engine call is refused until that tree is refreshed (`aidlc config --harness claude --yes`) or, while a workflow is active and the refresh is refused, the project is pinned (`aidlc config --pin 1.0.0 --yes`); and `/aidlc --scope <s>` on a project with an active workflow changes that workflow's scope, so new work uses `--new-intent`.
 
 
 ## Deviations from SPEC v1

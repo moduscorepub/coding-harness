@@ -19,10 +19,14 @@ It is a fork of [`awslabs/aidlc-workflows`](https://github.com/awslabs/aidlc-wor
 ```sh
 scripts/bootstrap.sh                  # clone upstream at v2.10.0 into upstream/ and apply patches/
 bun scripts/build.ts                  # package, determinism check, native binary, release assets in out/release
+bun scripts/build.ts --upstream <dir> --output <out>   # the same from another checkout or worktree of the fork
 bun scripts/install.ts --sandbox out/sandbox/try   # install into a throwaway root
+bun scripts/install.ts --sandbox out/sandbox/try --rollback   # rehearse the rollback there
 bun scripts/install.ts --real         # make the fork the active aidlc (2.10.0 kept for rollback)
 bun scripts/install.ts --rollback     # restore the previous active version
 ```
+
+**Existing upstream projects.** The fork's version is `1.0.0`. A project that still has an upstream `2.x` runtime (for example its `.claude/` tree) fails the engine's major-version check, so every `aidlc engine` call refuses to run. Refresh that tree with `aidlc config --harness claude --yes`. If a workflow is active, `aidlc config` refuses to refresh, so pin the project instead: `aidlc config --pin 1.0.0 --yes` writes `.aidlc-version`. Until the active workflow completes and the tree is refreshed, `aidlc doctor` still reports the `2.x` stamp of the older tree.
 
 ## Requirements
 

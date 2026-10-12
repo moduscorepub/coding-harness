@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 08:37:10 +0100
+Subject: [PATCH 18/18] chore(release): 1.0.0
+
+---
+ CHANGELOG.md                | 11 +++++++++++
+ README.md                   |  2 +-
+ core/tools/aidlc-version.ts |  2 +-
+ 3 files changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index eb798231af7703a53fee6afae6e3fcd01e870634..f134b55ca995f4d79c72b3cff8eb3cea3d32feda 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,6 +1,17 @@
+ # Changelog
+ All notable changes to this project will be documented in this file.
+ 
++## [1.0.0] - 2026-10-12
++
++AI-DLC 1.0.0 is 2.10.0 plus a `harness` distribution that runs the whole workflow inside Coding Harness (1.1.0 or newer). It is a fork release: its version is independent of upstream's, so installs turn the update check off. **Install:** `aidlc config --harness harness` in a project, then `/aidlc` in a harness session.
++
++* `aidlc version` reports `1.0.0`; `aidlc config --harness harness` and `aidlc doctor` support Coding Harness alongside the seven existing distributions, and a project can carry it together with Claude Code.
++* The harness distribution runs the engine's hooks through an in-process adapter, injects the method tree, and keeps the Claude Code distribution's fidelity: structured questions and approval gates through `ask`, stage rule bundles for every dispatch, plan approval, reviewer scope, sensors and usage accounting.
++* Reviewers run on a model family other than the builder's, the developer agent carries a continuous advisor that reviews against the human-approved artifacts, and AI-DLC contracts (no stubs, engine-owned state files, read-only reviewers, evidence before "done") are enforced as stream-time rules.
++* Compaction summaries are built from the workflow record, and a turn that crosses a stage boundary compacts once context use passes `harness.compactAtStageBoundary`.
++* A new `project-checks` sensor (every distribution) runs the project's own lint, type-check and test commands from `aidlc/spaces/<space>/checkers.json` on each source file Code Generation and Build and Test write; on Coding Harness, `/aidlc-checkers` discovers them.
++* On Coding Harness the developer agent hands off to the `smol` model role at its first edit (prewalk), and a bugfix observes the defect under the debugger before its first source edit.
++
+ ## [2.10.0] - 2026-09-24
+ 
+ AI-DLC 2.10.0 rolls up the user-visible changes merged since 2.9.0, including conversation-aware AIDA review workflows, stronger human authority and recovery across Construction, multi-harness project coexistence, and reliability corrections across providers, worktrees, hooks, sensors, and stage routing. **Upgrade:** run `aidlc update`, then run `aidlc config --yes` in each project to refresh its harness runtime. Manual-copy users must replace the complete `runtime/<harness>/` tree from `aidlc-copy-runtime-2.10.0.tar.gz`.
+diff --git a/README.md b/README.md
+index 90c4648bd95bf21c7258470a5a562f5c99a6dd5e..62b8c6a1d8752faa38a10a207bed70117e935e07 100644
+--- a/README.md
++++ b/README.md
+@@ -5,7 +5,7 @@ structured, verifiable software-delivery workflows. One harness-neutral core
+ runs natively in Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode,
+ and GitHub Copilot.
+ 
+-![version](https://img.shields.io/badge/version-2.10.0-blue)
++![version](https://img.shields.io/badge/version-1.0.0-blue)
+ ![license](https://img.shields.io/badge/license-MIT--0-green)
+ 
+ The Quick Start below installs the latest stable AI-DLC release.
+diff --git a/core/tools/aidlc-version.ts b/core/tools/aidlc-version.ts
+index ce1412a7e78db170230f1f2a966a2f2c8cc39e95..7ea5a8d56af676c6af2778aa471ac1a795048bcb 100644
+--- a/core/tools/aidlc-version.ts
++++ b/core/tools/aidlc-version.ts
+@@ -1,4 +1,4 @@
+ // Hand-edited single source of truth for the AIDLC framework version.
+ // Bumped in the same commit that adds the matching ## [N.N.N] heading
+ // to CHANGELOG.md. Pinned by tests/unit/t68-version-changelog-sync.test.ts.
+-export const AIDLC_VERSION = "2.10.0";
++export const AIDLC_VERSION = "1.0.0";

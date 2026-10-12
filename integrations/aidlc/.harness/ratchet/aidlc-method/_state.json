@@ -1,0 +1,152 @@
+{
+  "version": 1,
+  "flow": "aidlc-method",
+  "cases_paths": [
+    "ratchet/aidlc-method/cases"
+  ],
+  "harness_paths": [
+    "ratchet/aidlc-method/run.ts",
+    "ratchet/aidlc-method/grade.ts"
+  ],
+  "change_paths": [
+    "upstream/core/agents/aidlc-developer-agent.md",
+    "upstream/harness/harness/host/rules",
+    "upstream/harness/harness/host/watchdog/WATCHDOG.md"
+  ],
+  "off_limits": [
+    "upstream/core/tools",
+    "upstream/core/hooks",
+    "upstream/tests"
+  ],
+  "stop": {
+    "plateau": 3,
+    "rounds": 2
+  },
+  "train_ids": [
+    "py-feature-fahrenheit",
+    "py-merge-unsorted",
+    "py-roman-subtractive",
+    "py-tax-half-up",
+    "py-word-count",
+    "ts-csv-quoted",
+    "ts-feature-clamp",
+    "ts-invoice-percent",
+    "ts-slugify-ends"
+  ],
+  "test_ids": [
+    "py-feature-chunk",
+    "py-median-even",
+    "ts-backoff-cap",
+    "ts-booking-days",
+    "ts-feature-initials",
+    "ts-page-count"
+  ],
+  "approvals": {
+    "inputs": {
+      "sha": "b530c1cab39100f95c1e06d652d67e0eaeb6614b98d7068a724b6be447c77aba",
+      "at": "2026-10-12T06:51:19.310Z"
+    },
+    "grader": {
+      "sha": "f0aabf62056aba00c249e57788c36def51b3fe31cb1bb1aea76d2a0adb1fdcb7",
+      "at": "2026-10-12T07:12:27.115Z"
+    },
+    "plan": {
+      "sha": "c2ac080195e2619df988836364d8548f2101e930ce299ae754463d0862bb35a4",
+      "at": "2026-10-12T08:00:43.164Z"
+    }
+  },
+  "rounds": [
+    {
+      "round": 0,
+      "variant": "baseline",
+      "change": "baseline",
+      "decision": "baseline",
+      "reasons": [
+        "test noise floor on pass: ±0.000"
+      ],
+      "train": {
+        "pass": {
+          "n": 9,
+          "mean": 1,
+          "half": 0
+        },
+        "cost_usd": {
+          "n": 9,
+          "mean": 8.592093416666668,
+          "half": 1.4470557676396396
+        }
+      },
+      "test": {
+        "pass": {
+          "n": 6,
+          "mean": 1,
+          "half": 0
+        },
+        "cost_usd": {
+          "n": 6,
+          "mean": 8.112434241666666,
+          "half": 2.0810905699403643
+        }
+      },
+      "errors": 0,
+      "truncated": 0,
+      "at": "2026-10-12T08:00:36.334Z"
+    },
+    {
+      "round": 1,
+      "variant": "v1",
+      "change": "Developer agent: narrow knowledge preflight, skip debugger/re-derivation when brief has diagnosis",
+      "decision": "revert",
+      "reasons": [
+        "no change outside noise vs baseline"
+      ],
+      "train": {
+        "cost_usd": {
+          "n": 9,
+          "mean": 9.035934905555555,
+          "half": 1.5572282159339244
+        },
+        "pass": {
+          "n": 9,
+          "mean": 1,
+          "half": 0
+        }
+      },
+      "test": {
+        "cost_usd": {
+          "n": 6,
+          "mean": 7.907409066666666,
+          "half": 2.0951763028385204
+        },
+        "pass": {
+          "n": 6,
+          "mean": 1,
+          "half": 0
+        }
+      },
+      "errors": 0,
+      "truncated": 0,
+      "at": "2026-10-12T09:00:19.998Z"
+    }
+  ],
+  "current_round": 1,
+  "flat_rounds": 1,
+  "prices": {},
+  "command": "bun ratchet/aidlc-method/run.ts --variant {variant} --flow-dir {flow_dir}",
+  "split_seed": 1812014203,
+  "goal": {
+    "target": "cost_usd",
+    "direction": "lower",
+    "hold": [
+      "pass"
+    ],
+    "directions": {}
+  },
+  "reps": 1,
+  "baseline_inputs_sha": "b530c1cab39100f95c1e06d652d67e0eaeb6614b98d7068a724b6be447c77aba",
+  "best": {
+    "round": 0,
+    "variant": "baseline",
+    "test_score": 1
+  }
+}
