@@ -47,7 +47,11 @@ import {
 	formatAdvisorMemoryPrompt,
 } from "./advisor";
 import { setExtensionThemeDirs } from "@coding-harness/tui/theme";
-import { discoverExtensionResources, mergeByName } from "./extensibility/extensions/resource-discovery";
+import {
+	discoverExtensionResources,
+	mergeByName,
+	mergeExtensionSkills,
+} from "./extensibility/extensions/resource-discovery";
 import { refreshAgentDiscovery } from "./task";
 import { AsyncJobManager } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
@@ -3345,7 +3349,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			discoverExtensionResources(extensionRunner, cwd, "startup"),
 		);
 		if (startupExtensionResources.skills.length > 0) {
-			skills = mergeByName(skills, startupExtensionResources.skills);
+			skills = mergeExtensionSkills(skills, startupExtensionResources.skills);
 			skillWarnings = [...skillWarnings, ...startupExtensionResources.skillWarnings];
 			if (!options.parentTaskPrefix) setActiveSkills(skills);
 		}

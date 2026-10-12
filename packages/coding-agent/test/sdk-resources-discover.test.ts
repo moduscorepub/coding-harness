@@ -144,6 +144,35 @@ describe("resources_discover", () => {
 			await session.dispose();
 		}
 	});
+
+	it("an extension skill replaces another tool's same-name skill but not the harness's own", async () => {
+		const { cwd, extensionPath } = await createProject();
+		const contributed = path.join(cwd, "managed", "skills");
+		await writeFile(
+			path.join(contributed, "shared-skill", "SKILL.md"),
+			"---\nname: shared-skill\ndescription: Extension copy\n---\nbody\n",
+		);
+		await writeFile(
+			path.join(contributed, "native-skill", "SKILL.md"),
+			"---\nname: native-skill\ndescription: Extension copy\n---\nbody\n",
+		);
+		await writeFile(
+			path.join(cwd, ".claude", "skills", "shared-skill", "SKILL.md"),
+			"---\nname: shared-skill\ndescription: Claude copy\n---\nbody\n",
+		);
+		await writeFile(
+			path.join(cwd, ".harness", "skills", "native-skill", "SKILL.md"),
+			"---\nname: native-skill\ndescription: Harness copy\n---\nbody\n",
+		);
+		const session = await createSession(cwd, extensionPath);
+		try {
+			const byName = (name: string) => session.skills.filter(skill => skill.name === name);
+			expect(byName("shared-skill").map(skill => skill.description)).toEqual(["Extension copy"]);
+			expect(byName("native-skill").map(skill => skill.description)).toEqual(["Harness copy"]);
+		} finally {
+			await session.dispose();
+		}
+	});
 });
 
 describe("extension watchdog files", () => {

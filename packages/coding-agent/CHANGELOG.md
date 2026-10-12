@@ -4,7 +4,7 @@
 
 ### Added
 
-- `resources_discover` now fires: at session startup (`reason: "startup"`) and on every session rebuild (`reason: "reload"`). Extensions can contribute skill, prompt, theme, agent, rule and watchdog locations through `skillPaths`, `promptPaths`, `themePaths`, `agentPaths`, `rulePaths` and `watchdogPaths`. Agent directories reach task discovery and child sessions; rules feed the rulebook and TTSR; watchdog files join advisor discovery as the most specific level.
+- `resources_discover` now fires: at session startup (`reason: "startup"`) and on every session rebuild (`reason: "reload"`). Extensions can contribute skill, prompt, theme, agent, rule and watchdog locations through `skillPaths`, `promptPaths`, `themePaths`, `agentPaths`, `rulePaths` and `watchdogPaths`. Agent directories reach task discovery and child sessions; rules feed the rulebook and TTSR; watchdog files join advisor discovery as the most specific level. A contributed skill replaces a same-name skill read from another tool's directory (such as `.claude/skills`), so a project carrying one workflow for several tools runs this harness's copy; the harness's own skills still win.
 - `claude.customTools` setting: opt in to loading `~/.claude/tools/` and `.claude/tools/` modules as custom tools.
 
 ### Changed

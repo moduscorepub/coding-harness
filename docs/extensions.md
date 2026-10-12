@@ -559,7 +559,7 @@ How the result is used:
 
 | Field | Effect | Refreshed on reload |
 |---|---|---|
-| `skillPaths` | Directories of `<name>/SKILL.md` skills, appended to the session skills. A skill name that is already defined keeps the existing skill. | no |
+| `skillPaths` | Directories of `<name>/SKILL.md` skills, appended to the session skills. A skill name the harness's own sources already define keeps the existing skill; a skill read from another tool's directory (`.claude/skills`, `.codex/skills`, …) is replaced by the extension's. | no |
 | `promptPaths` | Directories of `*.md` prompt templates (`/<name>`), appended after user and project templates | no |
 | `agentPaths` | Directories of task agent definitions. Discovery scans them after project and user `agents/`, so a same-named project or user agent wins. Child sessions inherit them. | yes |
 | `rulePaths` | Directories of rule files (`*.md`, `*.mdc`). They join the rulebook, always-apply and TTSR buckets and resolve as `rule://<name>`. | yes |

@@ -10,6 +10,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { logger } from "@coding-harness/utils";
+import { isForeignUserProvider } from "../../capability";
 import type { Rule } from "../../capability/rule";
 import { loadTemplatesFromDir, type PromptTemplate } from "../../config/prompt-templates";
 import { loadRulesFromDir } from "../../discovery/builtin";
@@ -110,4 +111,23 @@ export function mergeByName<T extends { name: string }>(base: readonly T[], extr
 		merged.push(item);
 	}
 	return merged;
+}
+
+/**
+ * Merge extension-contributed skills into the discovered skills. The harness's
+ * own skill sources win a name conflict, but a skill read from another tool's
+ * config directory (`.claude/skills`, `.codex/skills`, …) yields to the
+ * extension: a project that carries one workflow for several tools runs the
+ * copy installed for this harness.
+ */
+export function mergeExtensionSkills(base: readonly Skill[], extra: readonly Skill[]): Skill[] {
+	const contributed = new Map<string, Skill>();
+	for (const skill of extra) if (!contributed.has(skill.name)) contributed.set(skill.name, skill);
+	const merged = base.map(skill => {
+		const replacement = contributed.get(skill.name);
+		if (!replacement) return skill;
+		contributed.delete(skill.name);
+		return isForeignUserProvider(skill.source.split(":")[0]) ? replacement : skill;
+	});
+	return [...merged, ...contributed.values()];
 }
