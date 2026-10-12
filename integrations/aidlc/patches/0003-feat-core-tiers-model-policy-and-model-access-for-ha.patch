@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
 Date: Sun, 11 Oct 2026 23:32:49 +0100
-Subject: [PATCH 03/18] feat(core): tiers, model policy and model access for
+Subject: [PATCH 03/19] feat(core): tiers, model policy and model access for
  harness agents
 
 Coding Harness task agents express model and effort as `model:` and

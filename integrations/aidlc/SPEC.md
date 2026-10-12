@@ -35,6 +35,8 @@ Where the build differs from the plan below. `STATUS.md` records the evidence fo
 | §9 B3: `harness.prewalk` and `harness.prewalkConductor` settings | `prewalk: true` on the developer; overrides through the harness's `task.agentPrewalk`; the conductor through `prewalk.enabled` | The harness already owns these switches |
 | §9 B4: skill text only | Skill text, developer-agent body text, and the derived debug-first rule | Live S22: with text alone the agents fixed the defect without the debugger |
 | §9 B2: change paths include `harness/harness/skills/**`; an interactive TUI drives `/ratchet` | Change paths: the developer agent, `host/rules`, `host/watchdog/WATCHDOG.md`; `ratchet/drive.ts` drives `/ratchet` over RPC and answers its dialogs | The skill is drift-guarded; the build machine has no tmux |
+| §3 R1–R7: `build.ts` builds `upstream/`; `install.ts` rolls back the real install only | `build.ts --upstream <dir> --output <dir>` builds another checkout; `install.ts --sandbox <dir> --rollback` rolls a sandbox back, with its state in `<dir>/install-state.json` | The release commit was built from a worktree while the ratchet held `upstream/`; the rollback was rehearsed before the real install |
+| §4: C12 follows C11 | A core fix sits between them: `fix(core): Python bytecode caches are never application source` adds `__pycache__` to the cache names that are never source | In the dogfood feature journey a Python test run inside Code Generation left bytecode that the stage had to claim in its source manifest, while the Construction checkpoint refuses a claim on a Git-ignored path; the workflow could not complete (STATUS.md, P5) |
 
 ---
 

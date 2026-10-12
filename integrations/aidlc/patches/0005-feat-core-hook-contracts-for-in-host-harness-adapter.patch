@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
 Date: Sun, 11 Oct 2026 23:40:17 +0100
-Subject: [PATCH 05/18] feat(core): hook contracts for in-host harness adapter
+Subject: [PATCH 05/19] feat(core): hook contracts for in-host harness adapter
 
 - run-sensors: AIDLC_SENSOR_FEEDBACK=1 prints the dispatcher's verdicts as
   one {"sensor_feedback":[...]} stdout line so an in-host adapter can show

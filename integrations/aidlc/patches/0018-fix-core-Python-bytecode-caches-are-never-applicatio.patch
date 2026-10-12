@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 13:46:46 +0100
+Subject: [PATCH 18/19] fix(core): Python bytecode caches are never application
+ source
+
+---
+ core/tools/aidlc-lib.ts                           | 1 +
+ tests/unit/t314-source-freshness-receipts.test.ts | 4 ++++
+ 2 files changed, 5 insertions(+)
+
+diff --git a/core/tools/aidlc-lib.ts b/core/tools/aidlc-lib.ts
+index 570b3ade847f75b39fe3973eff984f7f31dc1638..d4326fc34ce39e4e137b7f60f0f8d7283a8a1fc2 100644
+--- a/core/tools/aidlc-lib.ts
++++ b/core/tools/aidlc-lib.ts
+@@ -16015,6 +16015,7 @@ const SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES = [
+   ".ruff_cache",
+   ".tox",
+   ".venv",
++  "__pycache__",
+   "node_modules",
+   "venv",
+ ] as const;
+diff --git a/tests/unit/t314-source-freshness-receipts.test.ts b/tests/unit/t314-source-freshness-receipts.test.ts
+index 8d4001da33148899bb4ca45cf4fc19565dca89d3..29559b3c05227f6ef13276126c4fcdba3ff2fc82 100644
+--- a/tests/unit/t314-source-freshness-receipts.test.ts
++++ b/tests/unit/t314-source-freshness-receipts.test.ts
+@@ -467,11 +467,15 @@ describe("t314 workspace source fingerprint (in-process)", () => {
+       ".tox",
+       ".venv",
+       "venv",
++      "__pycache__",
+     ]) {
+       const nested = join(dir, name, "deep");
+       mkdirSync(nested, { recursive: true });
+       writeFileSync(join(nested, "volatile.js"), `generated("${name}");\n`);
+     }
++    // Python writes bytecode beside the module it compiles, so the cache sits inside source directories.
++    mkdirSync(join(dir, "pkg", "__pycache__"), { recursive: true });
++    writeFileSync(join(dir, "pkg", "__pycache__", "module.cpython-314.pyc"), "bytecode\n");
+     expect(workspaceSourceFingerprint(dir)).toBe(baseline);
+ 
+     writeFileSync(

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
 Date: Mon, 12 Oct 2026 06:12:34 +0100
-Subject: [PATCH 14/18] feat(harness): state-anchored compaction (A4)
+Subject: [PATCH 14/19] feat(harness): state-anchored compaction (A4)
 
 ---
  docs/guide/harnesses/coding-harness.md      |  27 ++

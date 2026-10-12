@@ -22,4 +22,5 @@ Apply in order with `git am -3 patches/*.patch`. See [../GRAFTING.md](../GRAFTIN
 | [`0015-feat-core-project-checks-sensor-and-aidlc-checkers-d.patch`](0015-feat-core-project-checks-sensor-and-aidlc-checkers-d.patch) | feat(core): project-checks sensor and /aidlc-checkers discovery (B1) | 27 |
 | [`0016-feat-harness-prewalk-handoff-on-the-developer-agent-.patch`](0016-feat-harness-prewalk-handoff-on-the-developer-agent-.patch) | feat(harness): prewalk handoff on the developer agent (B3) | 4 |
 | [`0017-feat-harness-debugger-first-diagnosis-in-a-bugfix-B4.patch`](0017-feat-harness-debugger-first-diagnosis-in-a-bugfix-B4.patch) | feat(harness): debugger-first diagnosis in a bugfix (B4) | 12 |
-| [`0018-chore-release-1.0.0.patch`](0018-chore-release-1.0.0.patch) | chore(release): 1.0.0 | 3 |
+| [`0018-fix-core-Python-bytecode-caches-are-never-applicatio.patch`](0018-fix-core-Python-bytecode-caches-are-never-applicatio.patch) | fix(core): Python bytecode caches are never application source | 2 |
+| [`0019-chore-release-1.0.0.patch`](0019-chore-release-1.0.0.patch) | chore(release): 1.0.0 | 3 |

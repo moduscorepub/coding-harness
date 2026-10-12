@@ -1,19 +1,19 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: mergimg0 <256672396+mergimg0@users.noreply.github.com>
 Date: Mon, 12 Oct 2026 08:37:10 +0100
-Subject: [PATCH 18/18] chore(release): 1.0.0
+Subject: [PATCH 19/19] chore(release): 1.0.0
 
 ---
- CHANGELOG.md                | 11 +++++++++++
+ CHANGELOG.md                | 12 ++++++++++++
  README.md                   |  2 +-
  core/tools/aidlc-version.ts |  2 +-
- 3 files changed, 13 insertions(+), 2 deletions(-)
+ 3 files changed, 14 insertions(+), 2 deletions(-)
 
 diff --git a/CHANGELOG.md b/CHANGELOG.md
-index eb798231af7703a53fee6afae6e3fcd01e870634..f134b55ca995f4d79c72b3cff8eb3cea3d32feda 100644
+index eb798231af7703a53fee6afae6e3fcd01e870634..e8dd29034f8a51429133fc2fd5b061cf11e04665 100644
 --- a/CHANGELOG.md
 +++ b/CHANGELOG.md
-@@ -1,6 +1,17 @@
+@@ -1,6 +1,18 @@
  # Changelog
  All notable changes to this project will be documented in this file.
  
@@ -27,6 +27,7 @@ index eb798231af7703a53fee6afae6e3fcd01e870634..f134b55ca995f4d79c72b3cff8eb3cea
 +* Compaction summaries are built from the workflow record, and a turn that crosses a stage boundary compacts once context use passes `harness.compactAtStageBoundary`.
 +* A new `project-checks` sensor (every distribution) runs the project's own lint, type-check and test commands from `aidlc/spaces/<space>/checkers.json` on each source file Code Generation and Build and Test write; on Coding Harness, `/aidlc-checkers` discovers them.
 +* On Coding Harness the developer agent hands off to the `smol` model role at its first edit (prewalk), and a bugfix observes the defect under the debugger before its first source edit.
++* Python bytecode caches (`__pycache__`) are no longer counted as application source. A stage that ran Python tests could not complete, because the bytecode showed up as unclaimed source changes and a manifest claim on a Git-ignored path was refused. Source fingerprints recorded with a `__pycache__` present change once, so an in-flight Construction review may need one fresh pass after the upgrade.
 +
  ## [2.10.0] - 2026-09-24
  
